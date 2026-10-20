@@ -52,11 +52,12 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   let overlayFile = '';
   let wsToken = '';
   let wsBase = '/';
+  const gatewayUrl = resolveGatewayUrl(options.gatewayUrl);
   const runner: PromptRunner = createPromptRunner({
-    gatewayUrl: resolveGatewayUrl(options.gatewayUrl),
-    onFallback(gatewayUrl, provider) {
+    gatewayUrl,
+    onFallback(fallbackUrl, provider) {
       console.warn(
-        `[ai-devtools] Gateway at ${gatewayUrl} is unreachable. Running ${provider} through @gateway/core.`,
+        `[ai-devtools] Gateway at ${fallbackUrl} is unreachable. Running ${provider} through @gateway/core.`,
       );
     },
   });
@@ -85,7 +86,12 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
     transformIndexHtml(html) {
       if (!devActive()) return undefined;
       if (html.includes(publicPath)) return undefined;
-      const configScript = `globalThis.__AI_DEVTOOLS__=${JSON.stringify({ wsToken, wsBase }).replace(/</g, '\\u003c')};`;
+      const configScript = `globalThis.__AI_DEVTOOLS__=${JSON.stringify({
+        wsToken,
+        wsBase,
+        gatewayUrl,
+        cwd: root,
+      }).replace(/</g, '\\u003c')};`;
       return [
         {
           tag: 'script',

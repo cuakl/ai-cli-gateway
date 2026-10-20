@@ -175,6 +175,64 @@ button, .secondary {
   border-top: 1px solid var(--line);
 }
 
+.contact {
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.contact h2 {
+  margin: 0 0 8px;
+  font-weight: 500;
+}
+
+.note-form {
+  display: grid;
+  gap: 8px;
+  max-width: 440px;
+  margin-top: 18px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.85rem;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.field textarea { resize: vertical; }
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.85rem;
+}
+
+.form-success {
+  margin: 8px 0 0;
+  color: var(--accent);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
 button:focus-visible, a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;

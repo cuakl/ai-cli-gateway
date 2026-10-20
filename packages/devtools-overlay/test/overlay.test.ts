@@ -20,6 +20,7 @@ describe('initDevtools', () => {
     document.querySelector('ai-devtools')?.remove();
     document.getElementById(HIGHLIGHT_ID)?.remove();
     document.documentElement.style.cursor = '';
+    delete (globalThis as { __AI_DEVTOOLS__?: unknown }).__AI_DEVTOOLS__;
     vi.restoreAllMocks();
   });
 
@@ -108,6 +109,60 @@ describe('initDevtools', () => {
     expect(seen).toEqual(['Make it emerald']);
     expect(toPng).toHaveBeenCalled();
     button.remove();
+  });
+
+  it('sends the cwd and gateway URL injected by the Vite plugin', async () => {
+    (globalThis as { __AI_DEVTOOLS__?: { cwd: string; gatewayUrl: string } }).__AI_DEVTOOLS__ = {
+      cwd: '/work/demo-react-app',
+      gatewayUrl: 'http://127.0.0.1:4199',
+    };
+    const seen: Array<string | undefined> = [];
+    const host = initDevtools({
+      client: {
+        async checkHealth() {
+          return true;
+        },
+        async streamPrompt(input) {
+          seen.push(input.cwd);
+          input.onDone?.();
+        },
+        cancel() {},
+      },
+    });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Tint the hero';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(seen).toEqual(['/work/demo-react-app']));
+  });
+
+  it('prefers an explicit cwd over the injected project root', async () => {
+    (globalThis as { __AI_DEVTOOLS__?: { cwd: string } }).__AI_DEVTOOLS__ = {
+      cwd: '/work/injected',
+    };
+    const seen: Array<string | undefined> = [];
+    const host = initDevtools({
+      cwd: '/work/explicit',
+      client: {
+        async checkHealth() {
+          return false;
+        },
+        async streamPrompt(input) {
+          seen.push(input.cwd);
+          input.onDone?.();
+        },
+        cancel() {},
+      },
+    });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Tint the hero';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(seen).toEqual(['/work/explicit']));
   });
 });
 

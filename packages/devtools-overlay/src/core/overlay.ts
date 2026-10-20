@@ -3,6 +3,7 @@ import { installContextCollectors } from '../context/index.js';
 import { OVERLAY_CSS } from '../styles.js';
 import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig } from '../types.js';
 import { App } from '../ui/App.js';
+import { readDevtoolsWindowConfig } from '../ui/bridge.js';
 
 export class AiDevtoolsElement extends HTMLElement {
   private readonly shadow: ShadowRoot;
@@ -32,10 +33,15 @@ export class AiDevtoolsElement extends HTMLElement {
   }
 
   private resolvedConfig(): DevtoolsConfig {
+    const injected = readDevtoolsWindowConfig();
     return {
       ...this.config,
-      gatewayUrl: this.config.gatewayUrl ?? this.getAttribute('gateway-url') ?? DEFAULT_GATEWAY_URL,
-      cwd: this.config.cwd ?? this.getAttribute('cwd') ?? '.',
+      gatewayUrl:
+        this.config.gatewayUrl ??
+        this.getAttribute('gateway-url') ??
+        nonempty(injected.gatewayUrl) ??
+        DEFAULT_GATEWAY_URL,
+      cwd: this.config.cwd ?? this.getAttribute('cwd') ?? nonempty(injected.cwd) ?? '.',
     };
   }
 
@@ -77,6 +83,11 @@ export function defineAiDevtools(): void {
   if (typeof customElements === 'undefined') return;
   if (customElements.get(OVERLAY_TAG)) return;
   customElements.define(OVERLAY_TAG, AiDevtoolsElement);
+}
+
+function nonempty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function initDevtools(config: DevtoolsConfig = {}): AiDevtoolsElement | null {

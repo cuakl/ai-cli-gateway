@@ -16,9 +16,13 @@ export const TEST_DONE_EVENT = 'ai-devtools:test-done';
 
 const BRIDGE_UNAVAILABLE = 'Dev server bridge is unavailable';
 
-interface WindowConfig {
+export interface DevtoolsWindowConfig {
   wsToken?: string;
   wsBase?: string;
+  /** Gateway origin injected by the Vite plugin. */
+  gatewayUrl?: string;
+  /** Absolute project root the agent should edit. */
+  cwd?: string;
 }
 
 interface BridgeMessage {
@@ -40,8 +44,8 @@ export function devtoolsSocketUrl(
   return `${protocol}//${locationLike.host}${normalized}?token=${encodeURIComponent(token)}`;
 }
 
-export function readDevtoolsWindowConfig(): WindowConfig {
-  const host = globalThis as { __AI_DEVTOOLS__?: WindowConfig };
+export function readDevtoolsWindowConfig(): DevtoolsWindowConfig {
+  const host = globalThis as { __AI_DEVTOOLS__?: DevtoolsWindowConfig };
   return host.__AI_DEVTOOLS__ ?? {};
 }
 

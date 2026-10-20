@@ -45,7 +45,16 @@ describe('aiDevtools', () => {
       /<head>[\s\S]*<script type="module" src="\/@ai-devtools\/overlay\.js"><\/script>[\s\S]*<\/head>/,
     );
     expect(html).toContain('__AI_DEVTOOLS__');
-    expect(html).toMatch(/"wsToken":"[^"]+"/);
+    const injected = html.match(/__AI_DEVTOOLS__=(\{.*?\});/);
+    expect(injected?.[1]).toBeTruthy();
+    const config = JSON.parse(injected?.[1] ?? '{}') as {
+      wsToken?: string;
+      gatewayUrl?: string;
+      cwd?: string;
+    };
+    expect(config.wsToken).toEqual(expect.any(String));
+    expect(config.gatewayUrl).toBe('http://127.0.0.1:4100');
+    expect(config.cwd).toBe(server.config.root);
 
     const transformed = await server.transformRequest('/test/fixtures/element.tsx');
     expect(transformed?.code).toContain('test/fixtures/element.tsx:3:4');
