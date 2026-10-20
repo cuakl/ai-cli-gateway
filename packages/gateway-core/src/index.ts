@@ -1,4 +1,15 @@
 export { BaseAdapter } from './adapters/base.js';
+export {
+  AntigravityAdapter,
+  ClaudeAdapter,
+  CodexAdapter,
+  CursorAdapter,
+  DEFAULT_CLAUDE_TOOLS,
+  cleanupCursorEphemeral,
+  createAdapter,
+  getAvailableAdapters,
+} from './adapters/index.js';
+export type { AdapterAvailability, CreateAdapterOptions } from './adapters/index.js';
 export { ProcessManager } from './session/manager.js';
 export {
   DEFAULT_SIGKILL_GRACE_MS,

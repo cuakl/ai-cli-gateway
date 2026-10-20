@@ -15,6 +15,7 @@ import { BinaryNotFoundError, BinaryResolver } from '../utils/binary.js';
  * the provider's stdout is not plain text, override the line parsers.
  * `execute` resolves for any process exit, including non-zero codes. It
  * rejects when the binary is missing, cwd is unusable, or the watchdog fires.
+ * `afterExecute` runs once the child has settled, including timeouts.
  */
 export abstract class BaseAdapter implements CLIAdapter {
   abstract readonly provider: ProviderType;
@@ -44,6 +45,8 @@ export abstract class BaseAdapter implements CLIAdapter {
     return [createStreamEvent(sessionId, 'error', { error: line })];
   }
 
+  protected async afterExecute(_options: PromptOptions, _sessionId: string): Promise<void> {}
+
   async execute(
     options: PromptOptions,
     onEvent: (event: UnifiedStreamEvent) => void,
@@ -60,22 +63,34 @@ export abstract class BaseAdapter implements CLIAdapter {
       }),
     );
 
-    const exitCode = await this.processes.start({
-      sessionId,
-      provider: this.provider,
-      command,
-      args,
-      cwd: parsed.cwd,
-      ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
-      onEvent: (event) => {
-        if (event.type === 'chunk' && event.payload.text) chunks.push(event.payload.text);
-        onEvent(event);
-      },
-      parseStdoutLine: (line, id) => this.parseStdoutLine(line, id),
-      parseStderrLine: (line, id) => this.parseStderrLine(line, id),
-    });
+    let failure: unknown;
+    try {
+      const exitCode = await this.processes.start({
+        sessionId,
+        provider: this.provider,
+        command,
+        args,
+        cwd: parsed.cwd,
+        ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
+        onEvent: (event) => {
+          if (event.type === 'chunk' && event.payload.text) chunks.push(event.payload.text);
+          onEvent(event);
+        },
+        parseStdoutLine: (line, id) => this.parseStdoutLine(line, id),
+        parseStderrLine: (line, id) => this.parseStderrLine(line, id),
+      });
 
-    return { exitCode, summary: chunks.join('') };
+      return { exitCode, summary: chunks.join('') };
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      try {
+        await this.afterExecute(parsed, sessionId);
+      } catch (error) {
+        if (failure === undefined) throw error;
+      }
+    }
   }
 
   async kill(sessionId: string): Promise<boolean> {
