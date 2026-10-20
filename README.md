@@ -73,6 +73,7 @@ pnpm --filter demo-react-app test
 | --- | --- | --- | --- |
 | `HOST` | `@gateway/server` | `127.0.0.1` | Bind address. Loopback keeps the gateway off the network. |
 | `PORT` | `@gateway/server` | `4100` | TCP port. |
+| `GATEWAY_ROOT` | `@gateway/server` | git root of the server process, or its current directory | Prompt `cwd` and file paths must stay inside this directory. |
 | `GATEWAY_URL` | Vite plugin, example client | `http://127.0.0.1:4100` | Gateway origin. The plugin injects this into the overlay. |
 | `GATEWAY_LOG_LEVEL` | `@gateway/core` | `info` | One of `debug`, `info`, `warn`, `error`, `silent`. Test runs are silent. |
 | `GATEWAY_PROVIDER` | example client | first detected CLI, preferring `antigravity` | Provider for `pnpm --filter @gateway/server client`. |
@@ -153,6 +154,8 @@ A small storefront with a header, hero, quantity counter, product cards, a note 
 ## Safeguards
 
 - The gateway binds to loopback unless `HOST` is set.
-- CLI arguments are passed as an array to `spawn`, not concatenated into a shell command.
-- The git bridge only stages paths inside the Vite project root.
-- A missing or unauthenticated CLI returns a structured error instead of an empty crash.
+- Prompt `cwd` and file paths must stay inside `GATEWAY_ROOT`. The Vite bridge applies the same check against the project it is serving.
+- CLI arguments are passed as an array to `spawn`, not concatenated into a shell command. A hung process is stopped with `SIGTERM`, then `SIGKILL`. The default limit is 5 minutes.
+- The git bridge only stages paths inside the Vite project root. A dirty or conflicted tree is reported in the chat before the agent edits.
+- While a prompt is running, full page reloads are collapsed into one refresh so multi-file edits do not thrash the browser.
+- A missing or unauthenticated CLI returns a structured error with setup steps instead of an empty crash.

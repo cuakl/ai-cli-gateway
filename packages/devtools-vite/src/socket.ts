@@ -7,10 +7,12 @@ import {
   type GitDiffSummary,
   type UnifiedStreamEvent,
 } from '@gateway/shared-types';
+import { confineToRoot, PathEscapeError } from '@gateway/core';
 import type { ViteDevServer } from 'vite';
 import { z } from 'zod';
 import type { DevtoolsPromptInput, PromptRunner, PromptSession } from './bridge.js';
-import { commit, getDiff, revert, type GitCommitResult } from './git-service.js';
+import { commit, getDiff, inspectWorkingTree, revert, type GitCommitResult } from './git-service.js';
+import { createHmrGuard, type HmrGuard } from './hmr-guard.js';
 import { getPtySession, spawnPty, type PtySession, type SpawnPtyOptions } from './pty-service.js';
 import { runTests, type TestRunResult } from './test-service.js';
 
@@ -106,6 +108,8 @@ export function registerDevtoolsSocket(
   const sessions = new WeakMap<StreamClient, Map<string, PromptSession>>();
   const ptySessions = new WeakMap<StreamClient, Set<string>>();
   const testRuns = new WeakMap<StreamClient, AbortController>();
+  const hmr = createHmrGuard(server.ws);
+  const reloadHolds = new Map<string, () => void>();
 
   server.ws.on(PROMPT_EVENT, (data: unknown, client: StreamClient) => {
     return handlePrompt(data, client).catch((error: unknown) => {
@@ -114,7 +118,7 @@ export function registerDevtoolsSocket(
   });
 
   server.ws.on(CANCEL_EVENT, (data: unknown, client: StreamClient) => {
-    return cancelPrompt(sessions, client, data).catch((error: unknown) => {
+    return cancelPrompt(sessions, reloadHolds, client, data).catch((error: unknown) => {
       server.config.logger.error(error instanceof Error ? error.message : 'AI DevTools cancel failed');
     });
   });
@@ -314,27 +318,61 @@ export function registerDevtoolsSocket(
       return;
     }
 
+    const requestedCwd = parsed.data.cwd ?? cwd;
+    let safeCwd = requestedCwd;
+    let safeFiles = parsed.data.files;
+    try {
+      safeCwd = await confineToRoot(cwd, requestedCwd);
+      if (parsed.data.files) {
+        safeFiles = [];
+        for (const file of parsed.data.files) {
+          safeFiles.push(await confineToRoot(cwd, file, safeCwd));
+        }
+      }
+    } catch (error) {
+      const message = error instanceof PathEscapeError ? error.message : errorMessage(error);
+      emitTerminal(client, parsed.data.sessionId ?? 'invalid', message);
+      return;
+    }
+
     const input: DevtoolsPromptInput = {
       provider: parsed.data.provider,
       prompt: parsed.data.prompt,
-      cwd: parsed.data.cwd ?? cwd,
-      ...(parsed.data.files !== undefined ? { files: parsed.data.files } : {}),
+      cwd: safeCwd,
+      ...(safeFiles !== undefined ? { files: safeFiles } : {}),
       ...(parsed.data.context !== undefined ? { context: parsed.data.context } : {}),
       ...(parsed.data.yolo !== undefined ? { yolo: parsed.data.yolo } : {}),
       ...(parsed.data.ephemeral !== undefined ? { ephemeral: parsed.data.ephemeral } : {}),
       ...(parsed.data.sessionId !== undefined ? { sessionId: parsed.data.sessionId } : {}),
     };
 
+    const report = await inspectWorkingTree(safeCwd);
+    if (report.warning) {
+      sendEvent(
+        client,
+        createStreamEvent(parsed.data.sessionId ?? 'workspace', 'chunk', { text: report.warning }),
+      );
+    }
+
     const tracked: { session?: PromptSession } = {};
     let finished = false;
-    const session = await runner.start(input, (event) => {
-      sendEvent(client, event);
-      if (event.type !== 'done') return;
-      finished = true;
-      const current = tracked.session;
-      if (!current) return;
-      sessions.get(client)?.delete(current.sessionId);
-    });
+    const release = holdReloads(hmr);
+    let session: PromptSession;
+    try {
+      session = await runner.start(input, (event) => {
+        sendEvent(client, event);
+        if (event.type !== 'done') return;
+        finished = true;
+        const current = tracked.session;
+        if (current) reloadHolds.delete(current.sessionId);
+        release();
+        if (!current) return;
+        sessions.get(client)?.delete(current.sessionId);
+      });
+    } catch (error) {
+      release();
+      throw error;
+    }
     tracked.session = session;
     if (finished) return;
 
@@ -344,13 +382,25 @@ export function registerDevtoolsSocket(
       sessions.set(client, map);
     }
     map.set(session.sessionId, session);
+    reloadHolds.set(session.sessionId, release);
     client.socket?.once('close', () => {
+      release();
       const current = sessions.get(client)?.get(session.sessionId);
       if (!current) return;
       sessions.get(client)?.delete(session.sessionId);
       void current.cancel();
     });
   }
+}
+
+function holdReloads(hmr: HmrGuard): () => void {
+  hmr.begin();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    hmr.end();
+  };
 }
 
 export function createDevtoolsServices(): DevtoolsServices {
@@ -366,6 +416,7 @@ export function createDevtoolsServices(): DevtoolsServices {
 
 async function cancelPrompt(
   sessions: WeakMap<StreamClient, Map<string, PromptSession>>,
+  reloadHolds: Map<string, () => void>,
   client: StreamClient,
   data: unknown,
 ): Promise<void> {
@@ -376,6 +427,8 @@ async function cancelPrompt(
   const targets = requested ? compact([map.get(requested)]) : [...map.values()].slice(-1);
   for (const session of targets) {
     map.delete(session.sessionId);
+    reloadHolds.get(session.sessionId)?.();
+    reloadHolds.delete(session.sessionId);
     await session.cancel();
   }
 }

@@ -5,10 +5,12 @@ import { createPromptRunner, DEFAULT_GATEWAY_URL, type PromptRunner } from './br
 import { injectDataLoc } from './jsx-transform.js';
 import { overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
 import { placeBeforeJsxCompilers } from './plugin-order.js';
+import { DEFAULT_RELOAD_DEBOUNCE_MS } from './hmr-guard.js';
 import { registerDevtoolsSocket } from './socket.js';
 
 export { createPromptRunner, DEFAULT_GATEWAY_URL } from './bridge.js';
 export type { DevtoolsPromptInput, PromptRunner, PromptSession } from './bridge.js';
+export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
 export {
@@ -70,6 +72,18 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   return {
     name: 'ai-devtools',
     enforce: 'pre',
+    config() {
+      return {
+        server: {
+          watch: {
+            awaitWriteFinish: {
+              stabilityThreshold: DEFAULT_RELOAD_DEBOUNCE_MS,
+              pollInterval: 50,
+            },
+          },
+        },
+      };
+    },
     configResolved(config) {
       command = config.command;
       root = config.root;

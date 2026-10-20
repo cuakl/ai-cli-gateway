@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { simpleGit } from 'simple-git';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GitDiffSummarySchema } from '@gateway/shared-types';
-import { commit, getDiff, parseUnifiedDiff, revert } from '../src/git-service.js';
+import { commit, getDiff, inspectWorkingTree, parseUnifiedDiff, revert } from '../src/git-service.js';
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -83,6 +83,34 @@ rename to new.txt
     const remoteLog = await exec('git', ['--git-dir', origin, 'log', '-1', '--format=%s', created.branch]);
     expect(remoteLog.stdout.trim()).toBe('feat: ship');
     expect(created.commitHash.length).toBeGreaterThan(7);
+  });
+
+  it('warns about uncommitted files and unresolved conflicts', async () => {
+    const clean = await createRepo();
+    expect(await inspectWorkingTree(clean)).toMatchObject({ clean: true, conflicted: [], dirty: [] });
+
+    await writeFile(path.join(clean, 'app.txt'), 'hello\nchanged\n');
+    await writeFile(path.join(clean, 'notes.txt'), 'scratch\n');
+    const dirty = await inspectWorkingTree(clean);
+    expect(dirty.clean).toBe(false);
+    expect(dirty.dirty).toEqual(expect.arrayContaining(['app.txt', 'notes.txt']));
+    expect(dirty.warning).toMatch(/uncommitted changes \(2 files\)/);
+
+    const conflicted = await createRepo();
+    const git = simpleGit(conflicted);
+    await git.checkoutLocalBranch('side');
+    await writeFile(path.join(conflicted, 'app.txt'), 'side\n');
+    await git.add('.');
+    await git.commit('side');
+    await git.checkout('main');
+    await writeFile(path.join(conflicted, 'app.txt'), 'main\n');
+    await git.add('.');
+    await git.commit('main');
+    await expect(git.merge(['side'])).rejects.toThrow();
+
+    const report = await inspectWorkingTree(conflicted);
+    expect(report.conflicted).toContain('app.txt');
+    expect(report.warning).toMatch(/unresolved conflicts in app\.txt/);
   });
 
   it('limits the diff to a nested project directory and rejects paths outside it', async () => {

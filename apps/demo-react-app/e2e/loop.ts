@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const logs: string[] = [];
   try {
     const editing = createEditingRuntime(dir);
-    gateway = await buildServer({ runtime: editing.runtime });
+    gateway = await buildServer({ runtime: editing.runtime, root: dir });
     await gateway.listen({ host: '127.0.0.1', port: 0 });
     const gatewayUrl = originOf(gateway);
     vite = await startVite(dir, gatewayUrl, logs);

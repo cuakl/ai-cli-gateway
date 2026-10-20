@@ -15,6 +15,8 @@ import { registerWebSocketRoutes } from './ws/handler.js';
 export interface BuildServerOptions {
   runtime?: GatewayRuntime;
   registry?: SessionRegistry;
+  /** Directory that prompt paths must stay inside. `startServer` sets this from config. */
+  root?: string;
   /** Fastify request logs. Defaults to off; the process entry logs the bind address. */
   logger?: boolean;
 }
@@ -32,6 +34,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const deps: ServerDeps = {
     registry: options.registry ?? new SessionRegistry(),
     runtime: options.runtime ?? createDefaultRuntime(),
+    ...(options.root !== undefined ? { root: options.root } : {}),
   };
 
   app.addHook('onClose', async () => {
@@ -73,7 +76,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 /** Bind the default runtime to `HOST`/`PORT` (loopback:4100 unless overridden). */
 export async function startServer(): Promise<FastifyInstance> {
   const config = resolveConfig();
-  const app = await buildServer();
+  const app = await buildServer({ root: config.root });
   await app.listen({ host: config.host, port: config.port });
   const bound = app.server.address();
   const port = bound && typeof bound === 'object' ? bound.port : config.port;

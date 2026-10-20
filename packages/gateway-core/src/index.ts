@@ -22,11 +22,15 @@ export type { CLIAdapter, ExecuteResult } from './types/adapter.js';
 export {
   BinaryNotFoundError,
   BinaryResolver,
+  CliAuthError,
   defaultProviderCandidates,
+  describeAuthFailure,
   isExecutable,
+  providerSetup,
   whichCommand,
 } from './utils/binary.js';
 export type { BinaryResolverOptions, ProviderCandidates, ResolveTarget } from './utils/binary.js';
+export { PathEscapeError, confineToRoot, confineWorkspace, isInsideRoot } from './utils/paths.js';
 export { logger } from './utils/logger.js';
 export type { LogLevel } from './utils/logger.js';
 

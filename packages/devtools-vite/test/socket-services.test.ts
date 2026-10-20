@@ -2,11 +2,17 @@ import type { ViteDevServer } from 'vite';
 import { describe, expect, it, vi } from 'vitest';
 import type { GitCommitRequest, GitDiffSummary } from '@gateway/shared-types';
 import type { PtySession } from '../src/pty-service.js';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { simpleGit } from 'simple-git';
 import {
   GIT_COMMIT_EVENT,
   GIT_DIFF_EVENT,
   GIT_REVERT_EVENT,
+  PROMPT_EVENT,
   RUN_TESTS_EVENT,
+  STREAM_EVENT,
   TEST_DONE_EVENT,
   TEST_OUTPUT_EVENT,
   registerDevtoolsSocket,
@@ -69,6 +75,57 @@ describe('devtools socket services', () => {
     ]);
     expect(commits).toEqual([{ message: 'feat: button', files: ['src/App.tsx'], push: true }]);
     expect(reverted).toEqual([['src/App.tsx']]);
+  });
+
+  it('rejects a prompt cwd outside the project and warns when the tree is dirty', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ai-devtools-prompt-'));
+    try {
+      const git = simpleGit(dir);
+      await git.init(['-b', 'main']);
+      await git.addConfig('user.name', 'DevTools Test');
+      await git.addConfig('user.email', 'devtools@example.com');
+      await writeFile(path.join(dir, 'app.txt'), 'hello\n');
+      await git.add('.');
+      await git.commit('init');
+      await writeFile(path.join(dir, 'app.txt'), 'hello\ndirty\n');
+
+      const seen: string[] = [];
+      const sent: Array<{ event: string; data: unknown }> = [];
+      const listeners = new Map<string, (data: unknown, client: Client) => Promise<void> | void>();
+      registerDevtoolsSocket(
+        {
+          config: { root: dir, logger: { error: vi.fn(), warn: vi.fn() } },
+          ws: {
+            on(event: string, listener: (data: unknown, client: Client) => Promise<void> | void) {
+              listeners.set(event, listener);
+            },
+          },
+        } as unknown as ViteDevServer,
+        {
+          async start(input) {
+            seen.push(input.cwd);
+            return { sessionId: 'sess_dirty', async cancel() {} };
+          },
+        },
+        dir,
+      );
+      const client = recorder(sent);
+      await listeners.get(PROMPT_EVENT)?.({ provider: 'cursor', prompt: 'edit', cwd: '/etc' }, client);
+      await listeners.get(PROMPT_EVENT)?.({ provider: 'cursor', prompt: 'edit' }, client);
+
+      expect(seen).toEqual([await realpath(dir)]);
+      expect(sent[0]).toMatchObject({
+        event: STREAM_EVENT,
+        data: { event: { type: 'error', payload: { error: expect.stringContaining('escapes the project root') } } },
+      });
+      expect(sent[1]).toMatchObject({ event: STREAM_EVENT, data: { event: { type: 'done' } } });
+      expect(sent[2]).toMatchObject({
+        event: STREAM_EVENT,
+        data: { event: { type: 'chunk', payload: { text: expect.stringContaining('uncommitted changes') } } },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('streams test output and returns the exit code', async () => {

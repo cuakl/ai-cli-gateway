@@ -17,6 +17,13 @@ export interface GitCommitResult {
   branch: string;
 }
 
+export interface WorkingTreeReport {
+  clean: boolean;
+  conflicted: string[];
+  dirty: string[];
+  warning?: string;
+}
+
 interface RepoContext {
   git: SimpleGit;
   top: string;
@@ -86,6 +93,47 @@ export async function getDiff(rootDir: string): Promise<GitDiffSummary> {
     raw: [raw.trim(), ...extras].filter(Boolean).join('\n'),
   };
   return GitDiffSummarySchema.parse(summary);
+}
+
+/**
+ * Look at `git status` before an agent edit. A clean tree has no warning.
+ * Conflicts and other uncommitted changes (including untracked files) do.
+ * A directory that is not a git repo is treated as clean so the prompt can proceed.
+ */
+export async function inspectWorkingTree(rootDir: string): Promise<WorkingTreeReport> {
+  try {
+    const repo = await openRepo(rootDir);
+    const status = await repo.git.status(['--', repo.scope]);
+    const conflicted = unique(status.conflicted);
+    const dirty = unique([...status.files.map((entry) => entry.path), ...status.not_added]);
+    const warning = workingTreeWarning(conflicted, dirty);
+    return {
+      clean: conflicted.length === 0 && dirty.length === 0,
+      conflicted,
+      dirty,
+      ...(warning ? { warning } : {}),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || /not a git repository/i.test(message)) {
+      return { clean: true, conflicted: [], dirty: [] };
+    }
+    throw error;
+  }
+}
+
+export function workingTreeWarning(conflicted: string[], dirty: string[]): string | undefined {
+  if (conflicted.length > 0) {
+    const listed = conflicted.slice(0, 5).join(', ');
+    const extra = conflicted.length > 5 ? ` and ${conflicted.length - 5} more` : '';
+    return `Warning: Git reports unresolved conflicts in ${listed}${extra}. Applying AI edits can overwrite those files.`;
+  }
+  if (dirty.length > 0) {
+    const noun = dirty.length === 1 ? 'file' : 'files';
+    return `Warning: The working tree already has uncommitted changes (${dirty.length} ${noun}). Review them before the agent edits more files.`;
+  }
+  return undefined;
 }
 
 /** Stage the requested files (or the project directory) and commit. Push when asked. */

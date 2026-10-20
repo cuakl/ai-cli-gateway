@@ -12,9 +12,11 @@ export function registerPromptRoutes(app: FastifyInstance, deps: ServerDeps): vo
       const outcome = await done;
       if (outcome.error) {
         const httpError = executionHttpError(outcome.error);
+        const setup = Array.isArray(httpError.details) ? httpError.details : undefined;
         return reply.code(httpError.statusCode).send({
           error: httpError.code,
           message: httpError.message,
+          ...(setup?.every((item) => typeof item === 'string') ? { setup } : {}),
           sessionId,
           events: outcome.events,
         });

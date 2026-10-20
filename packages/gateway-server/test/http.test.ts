@@ -1,7 +1,15 @@
-import { chmod } from 'node:fs/promises';
+import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BinaryNotFoundError, BinaryResolver, createAdapter, type CLIAdapter } from '@gateway/core';
+import {
+  BinaryNotFoundError,
+  BinaryResolver,
+  CliAuthError,
+  createAdapter,
+  providerSetup,
+  type CLIAdapter,
+} from '@gateway/core';
 import { createStreamEvent, type PromptOptions, type UnifiedStreamEvent } from '@gateway/shared-types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { collectSse, isRecord, postJson, requestJson, startTestServer, waitFor } from './helpers.js';
@@ -98,6 +106,8 @@ describe('POST /api/v1/prompt', () => {
       if (!isRecord(response.body)) return;
       expect(response.body.error).toBe('provider_unavailable');
       expect(response.body.message).toEqual(expect.stringContaining('agy'));
+      expect(response.body.setup).toEqual(providerSetup('antigravity'));
+      expect(response.body.message).toEqual(expect.stringContaining(providerSetup('antigravity')[0] ?? ''));
     } finally {
       await server.close();
     }
@@ -149,6 +159,60 @@ describe('POST /api/v1/prompt', () => {
       expect(types).toContain('done');
     } finally {
       await server.close();
+    }
+  });
+
+  it('rejects a cwd outside the authorized project root', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'gateway-http-root-'));
+    const outside = await mkdtemp(path.join(tmpdir(), 'gateway-http-out-'));
+    await writeFile(path.join(root, 'keep.txt'), 'stay\n');
+    const adapter = scriptedEcho();
+    const server = await startTestServer({ runtime: runtimeFor({ cursor: adapter }), root });
+    try {
+      const escaped = await postJson(`${server.url}/api/v1/prompt`, {
+        provider: 'cursor',
+        cwd: outside,
+        prompt: 'hello',
+      });
+      expect(escaped.status).toBe(400);
+      expect(escaped.body).toMatchObject({ error: 'path_escape' });
+
+      const nested = await postJson(`${server.url}/api/v1/prompt`, {
+        provider: 'cursor',
+        cwd: root,
+        files: ['../outside.txt'],
+        prompt: 'hello',
+      });
+      expect(nested.status).toBe(400);
+      expect(nested.body).toMatchObject({ error: 'path_escape' });
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('returns setup steps when the CLI is not authenticated', async () => {
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'gateway-http-auth-')));
+    const server = await startTestServer({
+      runtime: runtimeFor({ claude: new UnauthenticatedClaude() }),
+      root,
+    });
+    try {
+      const response = await postJson(`${server.url}/api/v1/prompt`, {
+        provider: 'claude',
+        cwd: root,
+        prompt: 'hello',
+      });
+      expect(response.status).toBe(422);
+      expect(response.body).toMatchObject({
+        error: 'cli_auth_required',
+        setup: providerSetup('claude'),
+      });
+      expect(isRecord(response.body) && response.body.message).toEqual(expect.stringContaining('not authenticated'));
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });
@@ -341,6 +405,27 @@ function scriptedEcho(): ScriptedAdapter {
     onEvent(createStreamEvent(sessionId, 'done', { durationMs: 5 }));
     return { exitCode: 0, summary: 'hello world' };
   });
+}
+
+class UnauthenticatedClaude implements CLIAdapter {
+  readonly provider = 'claude' as const;
+
+  async isAvailable(): Promise<boolean> {
+    return true;
+  }
+
+  async getBinaryPath(): Promise<string> {
+    return '/mock/bin/claude';
+  }
+
+  async execute(): Promise<{ exitCode: number; summary: string }> {
+    const setup = providerSetup(this.provider);
+    throw new CliAuthError(this.provider, 'Claude Code (`claude`) is not authenticated.\n1. sign in', setup);
+  }
+
+  async kill(): Promise<boolean> {
+    return false;
+  }
 }
 
 class MissingAntigravity implements CLIAdapter {

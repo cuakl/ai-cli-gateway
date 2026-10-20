@@ -67,11 +67,26 @@ export function defaultProviderCandidates(home: string = homedir()): ProviderCan
 
 export class BinaryNotFoundError extends Error {
   readonly provider: ProviderType;
+  readonly setup: string[];
 
   constructor(provider: ProviderType) {
-    super(missingBinaryMessage(provider));
+    const setup = providerSetup(provider);
+    super(formatWithSteps(missingBinaryIntro(provider), setup));
     this.name = 'BinaryNotFoundError';
     this.provider = provider;
+    this.setup = setup;
+  }
+}
+
+export class CliAuthError extends Error {
+  readonly provider: string;
+  readonly setup: string[];
+
+  constructor(provider: string, message: string, setup: string[]) {
+    super(message);
+    this.name = 'CliAuthError';
+    this.provider = provider;
+    this.setup = setup;
   }
 }
 
@@ -163,19 +178,81 @@ export async function isExecutable(filePath: string): Promise<boolean> {
   }
 }
 
-function missingBinaryMessage(provider: ProviderType): string {
+const AUTH_FAILURE =
+  /\b(unauthori[sz]ed|not authenticated|unauthenticated|authentication required|please (log|sign) in|log in required|login required|not logged in|sign in required|invalid api key|missing api key)\b/i;
+
+export function providerSetup(provider: ProviderType): string[] {
   switch (provider) {
     case 'cursor':
-      return 'Cursor CLI (`agent`) was not found. Install the Cursor CLI and ensure `agent` is on PATH or at ~/.cursor/bin/agent.';
+      return [
+        'Install the Cursor CLI so `agent` is on PATH (usually ~/.cursor/bin or ~/.local/bin).',
+        'Run `agent` in a terminal and finish sign-in.',
+      ];
     case 'antigravity':
-      return 'Antigravity CLI (`agy`) was not found. Install it and ensure `agy` is on PATH.';
+      return ['Install the Antigravity CLI so `agy` is on PATH.', 'Run `agy` and finish sign-in.'];
     case 'claude':
-      return 'Claude Code (`claude`) was not found. Install Claude Code and ensure `claude` is on PATH.';
+      return ['Install Claude Code so `claude` is on PATH.', 'Run `claude` and complete login.'];
     case 'codex':
-      return 'Codex CLI (`codex`) was not found. Install it and ensure `codex` is on PATH.';
+      return ['Install the Codex CLI so `codex` is on PATH.', 'Run `codex` and finish sign-in.'];
+    default: {
+      const exhaustive: never = provider;
+      return [`Install the CLI for "${exhaustive}" and complete its login.`];
+    }
+  }
+}
+
+/**
+ * Turn CLI output that asks for login into a structured error.
+ * Ordinary failures (compile errors, non-zero exits) return null.
+ */
+export function describeAuthFailure(
+  provider: string,
+  output: string,
+): { message: string; setup: string[] } | null {
+  if (!AUTH_FAILURE.test(output)) return null;
+  const known = ProviderTypeSchema.safeParse(provider);
+  const setup = known.success
+    ? providerSetup(known.data)
+    : ['Install the CLI and complete its login, then retry.'];
+  const label = known.success ? providerLabel(known.data) : provider;
+  return { message: formatWithSteps(`${label} is not authenticated.`, setup), setup };
+}
+
+function missingBinaryIntro(provider: ProviderType): string {
+  switch (provider) {
+    case 'cursor':
+      return 'Cursor CLI (`agent`) was not found.';
+    case 'antigravity':
+      return 'Antigravity CLI (`agy`) was not found.';
+    case 'claude':
+      return 'Claude Code (`claude`) was not found.';
+    case 'codex':
+      return 'Codex CLI (`codex`) was not found.';
     default: {
       const exhaustive: never = provider;
       return `CLI for provider "${exhaustive}" was not found.`;
     }
   }
+}
+
+function providerLabel(provider: ProviderType): string {
+  switch (provider) {
+    case 'cursor':
+      return 'Cursor CLI (`agent`)';
+    case 'antigravity':
+      return 'Antigravity CLI (`agy`)';
+    case 'claude':
+      return 'Claude Code (`claude`)';
+    case 'codex':
+      return 'Codex CLI (`codex`)';
+    default: {
+      const exhaustive: never = provider;
+      return exhaustive;
+    }
+  }
+}
+
+function formatWithSteps(intro: string, steps: string[]): string {
+  const numbered = steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
+  return `${intro}\n${numbered}`;
 }

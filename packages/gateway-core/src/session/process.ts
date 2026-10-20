@@ -6,6 +6,7 @@ import {
   DEFAULT_PROCESS_TIMEOUT_MS,
   type UnifiedStreamEvent,
 } from '@gateway/shared-types';
+import { CliAuthError, describeAuthFailure } from '../utils/binary.js';
 import { logger } from '../utils/logger.js';
 import { LineBuffer } from './stream.js';
 
@@ -63,6 +64,7 @@ export class ManagedProcess {
   private pendingSignal: NodeJS.Signals | null = null;
   private readonly stdoutBuffer = new LineBuffer();
   private readonly stderrBuffer = new LineBuffer();
+  private outputTail = '';
   private readonly stdoutDecoder = new StringDecoder('utf8');
   private readonly stderrDecoder = new StringDecoder('utf8');
   private readonly exitPromise: Promise<number>;
@@ -224,10 +226,15 @@ export class ManagedProcess {
     this.emitLines(this.stderrBuffer.flush(), this.parseStderrLine);
     this.clearTimers();
 
+    let authError: CliAuthError | undefined;
     if (!this.timedOut && code !== null && code !== 0) {
+      const described = describeAuthFailure(this.provider, this.outputTail);
+      if (described) {
+        authError = new CliAuthError(this.provider, described.message, described.setup);
+      }
       this.onEvent(
         createStreamEvent(this.sessionId, 'error', {
-          error: `Process exited with code ${code}`,
+          error: authError?.message ?? `Process exited with code ${code}`,
         }),
       );
     }
@@ -239,6 +246,10 @@ export class ManagedProcess {
 
     if (this.settled) return;
     this.settled = true;
+    if (authError) {
+      this.rejectExit(authError);
+      return;
+    }
     if (this.timedOut) {
       this.rejectExit(new ProcessTimeoutError(this.sessionId, this.timeoutMs));
       return;
@@ -259,6 +270,7 @@ export class ManagedProcess {
     parse: (line: string, sessionId: string) => UnifiedStreamEvent[],
   ): void {
     for (const line of lines) {
+      this.noteOutput(line);
       let events: UnifiedStreamEvent[];
       try {
         events = parse(line, this.sessionId);
@@ -269,6 +281,11 @@ export class ManagedProcess {
       }
       for (const event of events) this.onEvent(event);
     }
+  }
+
+  private noteOutput(line: string): void {
+    if (!line) return;
+    this.outputTail = `${this.outputTail}${line}\n`.slice(-8_000);
   }
 
   private clearTimers(): void {

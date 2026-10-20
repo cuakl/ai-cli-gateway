@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ProcessManager, ProcessTimeoutError } from '../src/index.js';
+import { CliAuthError, ProcessManager, ProcessTimeoutError } from '../src/index.js';
 import type { UnifiedStreamEvent } from '../src/index.js';
 import { isProcessAlive, waitFor } from './helpers.js';
 
@@ -167,6 +167,27 @@ describe('ProcessManager', () => {
 
     await expect(pending).rejects.toBeInstanceOf(ProcessTimeoutError);
     expect(isProcessAlive(pid)).toBe(false);
+  });
+
+  it('returns setup steps when the CLI asks for authentication', async () => {
+    const manager = new ProcessManager();
+    const { events, onEvent } = trackEvents();
+
+    const failure = manager.start({
+      sessionId: randomUUID(),
+      provider: 'claude',
+      command: process.execPath,
+      args: nodeArgs("process.stderr.write('Please log in to continue\\n'); process.exit(1)"),
+      cwd: tmpdir(),
+      onEvent,
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(CliAuthError);
+    await expect(failure).rejects.toThrow(/not authenticated/);
+    await expect(failure).rejects.toThrow(/claude/);
+    const auth = events.find((event) => event.type === 'error' && event.payload.error?.includes('not authenticated'));
+    expect(auth?.payload.error).toContain('1. Install Claude Code');
+    expect(events.at(-1)?.type).toBe('done');
   });
 
   it('rejects a second process with the same session id', async () => {

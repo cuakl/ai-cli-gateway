@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { BinaryNotFoundError, ProcessTimeoutError, logger, type CLIAdapter } from '@gateway/core';
+import {
+  BinaryNotFoundError,
+  CliAuthError,
+  PathEscapeError,
+  ProcessTimeoutError,
+  confineWorkspace,
+  logger,
+  type CLIAdapter,
+} from '@gateway/core';
 import {
   createStreamEvent,
   type PromptOptions,
@@ -35,16 +43,17 @@ export async function startExecution(
   request: PromptRequest,
   sessionId: string = request.sessionId ?? `sess_${randomUUID()}`,
 ): Promise<StartedExecution> {
-  const adapter = await prepareAdapter(deps, request, sessionId);
+  const prompt = await confineRequest(deps, request);
+  const adapter = await prepareAdapter(deps, prompt, sessionId);
   deps.registry.create({
     id: sessionId,
-    provider: request.provider,
-    cwd: request.cwd,
+    provider: prompt.provider,
+    cwd: prompt.cwd,
     adapter,
-    ...(request.ephemeral !== undefined ? { ephemeral: request.ephemeral } : {}),
+    ...(prompt.ephemeral !== undefined ? { ephemeral: prompt.ephemeral } : {}),
   });
-  logger.info(`session ${sessionId} started (${request.provider})`);
-  const done = executeSession(deps.registry, adapter, request, sessionId);
+  logger.info(`session ${sessionId} started (${prompt.provider})`);
+  const done = executeSession(deps.registry, adapter, prompt, sessionId);
   return { sessionId, done };
 }
 
@@ -85,7 +94,7 @@ async function prepareAdapter(
     await adapter.getBinaryPath();
   } catch (error) {
     if (error instanceof BinaryNotFoundError) {
-      throw new HttpError(422, 'provider_unavailable', error.message);
+      throw new HttpError(422, 'provider_unavailable', error.message, error.setup);
     }
     throw error;
   }
@@ -182,10 +191,33 @@ async function signalUntilRegistered(
   }
 }
 
+async function confineRequest(deps: ServerDeps, request: PromptRequest): Promise<PromptRequest> {
+  if (!deps.root) return request;
+  try {
+    const confined = await confineWorkspace(deps.root, request.cwd, request.files ?? []);
+    return {
+      ...request,
+      cwd: confined.cwd,
+      ...(request.files !== undefined ? { files: confined.files } : {}),
+    };
+  } catch (error) {
+    if (error instanceof PathEscapeError) {
+      throw new HttpError(400, 'path_escape', error.message);
+    }
+    throw error;
+  }
+}
+
 export function executionHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
   if (error instanceof BinaryNotFoundError) {
-    return new HttpError(422, 'provider_unavailable', error.message);
+    return new HttpError(422, 'provider_unavailable', error.message, error.setup);
+  }
+  if (error instanceof CliAuthError) {
+    return new HttpError(422, 'cli_auth_required', error.message, error.setup);
+  }
+  if (error instanceof PathEscapeError) {
+    return new HttpError(400, 'path_escape', error.message);
   }
   if (error instanceof ProcessTimeoutError) {
     return new HttpError(504, 'timeout', error.message);
