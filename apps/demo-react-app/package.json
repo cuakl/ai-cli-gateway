@@ -1,0 +1,7 @@
+{
+  "name": "demo-react-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Example React app. Implemented in Phase 7.",
+  "type": "module"
+}

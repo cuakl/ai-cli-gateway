@@ -1,0 +1,7 @@
+{
+  "name": "@gateway/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HTTP and WebSocket gateway server. Implemented in Phase 3.",
+  "type": "module"
+}
