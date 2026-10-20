@@ -13,7 +13,14 @@ export {
 } from './inspector/locator.js';
 export { ElementPicker, HIGHLIGHT_ID, describeElement, highlightFrame } from './inspector/picker.js';
 export { DEFAULT_GATEWAY_URL, OVERLAY_TAG } from './types.js';
-export type { DevtoolsConfig, GatewayBridge, GatewayTransportMode, StreamPromptInput } from './types.js';
+export type {
+  DevtoolsBridge,
+  DevtoolsConfig,
+  DevtoolsPanel,
+  GatewayBridge,
+  GatewayTransportMode,
+  StreamPromptInput,
+} from './types.js';
 export {
   GatewayCancelledError,
   GatewayClient,

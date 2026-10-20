@@ -338,6 +338,7 @@ function applyStreamEvent(
   onTerminal: () => void,
 ): void {
   if (event.type === 'chunk' && event.payload.text) input.onChunk?.(event.payload.text);
+  if (event.type === 'file_edit') input.onFileEdit?.(event.payload.filePath ?? '');
   if (event.type === 'error') input.onError?.(event.payload.error ?? 'The agent reported an error');
   if (event.type === 'done' || event.type === 'error') onTerminal();
 }

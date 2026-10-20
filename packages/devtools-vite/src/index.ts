@@ -11,7 +11,23 @@ export { createPromptRunner, DEFAULT_GATEWAY_URL } from './bridge.js';
 export type { DevtoolsPromptInput, PromptRunner, PromptSession } from './bridge.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
-export { CANCEL_EVENT, PROMPT_EVENT, STREAM_EVENT } from './socket.js';
+export {
+  CANCEL_EVENT,
+  GIT_COMMIT_EVENT,
+  GIT_DIFF_EVENT,
+  GIT_REVERT_EVENT,
+  PROMPT_EVENT,
+  PTY_DATA_EVENT,
+  PTY_DISPOSE_EVENT,
+  PTY_EXIT_EVENT,
+  PTY_INPUT_EVENT,
+  PTY_RESIZE_EVENT,
+  PTY_SPAWN_EVENT,
+  RUN_TESTS_EVENT,
+  STREAM_EVENT,
+  TEST_DONE_EVENT,
+  TEST_OUTPUT_EVENT,
+} from './socket.js';
 
 export interface DevtoolsPluginOptions {
   /** Gateway origin. Defaults to `GATEWAY_URL` or `http://127.0.0.1:4100`. */
@@ -27,13 +43,15 @@ export interface DevtoolsPluginOptions {
 
 /**
  * Inject the DevTools overlay, stamp JSX with source locations, and bridge
- * `ai-devtools:prompt` / `ai-devtools:cancel` on Vite's HMR socket.
+ * `ai-devtools:prompt` / `ai-devtools:cancel` on Vite's HMR socket, plus git, PTY, and test events.
  */
 export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   let command: 'build' | 'serve' = 'serve';
   let root = process.cwd();
   let publicPath = overlayPublicPath('/');
   let overlayFile = '';
+  let wsToken = '';
+  let wsBase = '/';
   const runner: PromptRunner = createPromptRunner({
     gatewayUrl: resolveGatewayUrl(options.gatewayUrl),
     onFallback(gatewayUrl, provider) {
@@ -56,6 +74,8 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
       root = config.root;
       publicPath = overlayPublicPath(config.base);
       overlayFile = resolveOverlayBundle();
+      wsToken = config.webSocketToken;
+      wsBase = config.base || '/';
       if (devActive()) placeBeforeJsxCompilers(config.plugins as Plugin[]);
     },
     transform(code, id) {
@@ -65,7 +85,14 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
     transformIndexHtml(html) {
       if (!devActive()) return undefined;
       if (html.includes(publicPath)) return undefined;
+      const configScript = `globalThis.__AI_DEVTOOLS__=${JSON.stringify({ wsToken, wsBase }).replace(/</g, '\\u003c')};`;
       return [
+        {
+          tag: 'script',
+          attrs: { 'data-ai-devtools': 'config' },
+          children: configScript,
+          injectTo: 'head',
+        },
         {
           tag: 'script',
           attrs: { type: 'module', src: publicPath },

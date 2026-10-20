@@ -44,6 +44,8 @@ describe('aiDevtools', () => {
     expect(html).toMatch(
       /<head>[\s\S]*<script type="module" src="\/@ai-devtools\/overlay\.js"><\/script>[\s\S]*<\/head>/,
     );
+    expect(html).toContain('__AI_DEVTOOLS__');
+    expect(html).toMatch(/"wsToken":"[^"]+"/);
 
     const transformed = await server.transformRequest('/test/fixtures/element.tsx');
     expect(transformed?.code).toContain('test/fixtures/element.tsx:3:4');

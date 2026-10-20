@@ -1,26 +1,37 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { ProviderType, SelectedElement } from '@gateway/shared-types';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { GitCommitRequest, GitDiffSummary, ProviderType, SelectedElement } from '@gateway/shared-types';
 import { gatherContext } from '../context/index.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
-import type { DevtoolsConfig } from '../types.js';
+import type { DevtoolsConfig, DevtoolsPanel } from '../types.js';
+import { createDevtoolsBridge } from './bridge.js';
 import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
 import { GatewayCancelledError, GatewayClient } from './client.js';
+import { DiffViewer } from './DiffViewer.js';
+import { TerminalPanel } from './Terminal.js';
+import { TestRunner } from './TestRunner.js';
 import { Toolbar } from './Toolbar.js';
 
 export interface AppProps {
   config: DevtoolsConfig;
 }
 
+const REVIEW_NOTICE = 'The agent edited files. Review the diffs before committing.';
+
 export function App({ config }: AppProps) {
   const [inspecting, setInspecting] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [panel, setPanel] = useState<DevtoolsPanel | null>(null);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [provider, setProvider] = useState<ProviderType>('antigravity');
   const [prompt, setPrompt] = useState('');
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [sending, setSending] = useState(false);
+  const [summary, setSummary] = useState<GitDiffSummary | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffCount, setDiffCount] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const elementRef = useRef<Element | null>(null);
   const pickerRef = useRef<ElementPicker | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
@@ -35,6 +46,24 @@ export function App({ config }: AppProps) {
       }),
     [config.client, config.cwd, config.gatewayUrl, config.transport],
   );
+  const bridge = useMemo(() => config.bridge ?? createDevtoolsBridge(), [config.bridge]);
+
+  const refreshDiffs = useCallback(async (): Promise<number> => {
+    setDiffLoading(true);
+    try {
+      const next = await bridge.gitDiff();
+      setSummary(next);
+      setDiffCount(next.files.length);
+      setDiffError(null);
+      return next.files.length;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not load the diff';
+      if (message !== 'Dev server bridge is unavailable') setDiffError(message);
+      return 0;
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [bridge]);
 
   useLayoutEffect(() => {
     const picker = new ElementPicker({
@@ -42,7 +71,7 @@ export function App({ config }: AppProps) {
         elementRef.current = element;
         setSelected(locateElement(element));
         setInspecting(false);
-        setChatOpen(true);
+        setPanel('chat');
       },
       onCancel() {
         setInspecting(false);
@@ -65,7 +94,15 @@ export function App({ config }: AppProps) {
   useLayoutEffect(() => {
     const node = drawerRef.current?.querySelector('.messages');
     if (node instanceof HTMLElement) node.scrollTop = node.scrollHeight;
-  }, [messages]);
+  }, [messages, panel]);
+
+  useEffect(() => {
+    void refreshDiffs();
+  }, [refreshDiffs]);
+
+  useEffect(() => {
+    if (panel === 'diffs') void refreshDiffs();
+  }, [panel, refreshDiffs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,10 +132,15 @@ export function App({ config }: AppProps) {
     );
   }
 
+  function selectPanel(next: DevtoolsPanel): void {
+    setPanel((current) => (current === next ? null : next));
+  }
+
   async function submit(): Promise<void> {
     const text = prompt.trim();
     if (!text || sending) return;
     const assistantId = createId();
+    let sawEdit = false;
     setPrompt('');
     setSending(true);
     setMessages((current) => [
@@ -118,11 +160,18 @@ export function App({ config }: AppProps) {
         onChunk(chunk) {
           updateAssistant(assistantId, (current) => current + chunk, false);
         },
+        onFileEdit() {
+          sawEdit = true;
+        },
         onError(message) {
           updateAssistant(assistantId, (current) => (current ? `${current}\n${message}` : message), true);
         },
         onDone() {
           updateAssistant(assistantId, (current) => current || 'The agent finished without text output.', false);
+          if (!sawEdit) return;
+          void refreshDiffs().then((count) => {
+            if (count > 0) setNotice(REVIEW_NOTICE);
+          });
         },
       });
     } catch (error) {
@@ -139,34 +188,74 @@ export function App({ config }: AppProps) {
 
   return (
     <div className="dock">
+      {notice ? (
+        <div className="notice" role="status">
+          <span>{notice}</span>
+          <button
+            type="button"
+            data-action="review-diffs"
+            onClick={() => {
+              setNotice(null);
+              setPanel('diffs');
+            }}
+          >
+            Review diffs
+          </button>
+          <button type="button" className="icon-button" data-action="dismiss-notice" onClick={() => setNotice(null)}>
+            ✕
+          </button>
+        </div>
+      ) : null}
       <Toolbar
         inspecting={inspecting}
-        chatOpen={chatOpen}
+        panel={panel}
+        diffCount={diffCount}
         status={status}
         onToggleInspect={() => setInspecting((value) => !value)}
-        onToggleChat={() => setChatOpen((value) => !value)}
+        onSelectPanel={selectPanel}
       />
-      {chatOpen ? (
+      {panel ? (
         <div ref={drawerRef}>
-          <ChatDrawer
-            selected={selected}
-            provider={provider}
-            prompt={prompt}
-            messages={messages}
-            sending={sending}
-            onPromptChange={setPrompt}
-            onProviderChange={setProvider}
-            onClearSelection={() => {
-              elementRef.current = null;
-              setSelected(null);
-            }}
-            onSuggest={setPrompt}
-            onSubmit={() => {
-              void submit();
-            }}
-            onStop={() => client.cancel()}
-            onClose={() => setChatOpen(false)}
-          />
+          {panel === 'chat' ? (
+            <ChatDrawer
+              selected={selected}
+              provider={provider}
+              prompt={prompt}
+              messages={messages}
+              sending={sending}
+              onPromptChange={setPrompt}
+              onProviderChange={setProvider}
+              onClearSelection={() => {
+                elementRef.current = null;
+                setSelected(null);
+              }}
+              onSuggest={setPrompt}
+              onSubmit={() => {
+                void submit();
+              }}
+              onStop={() => client.cancel()}
+              onClose={() => setPanel(null)}
+            />
+          ) : null}
+          {panel === 'diffs' ? (
+            <DiffViewer
+              summary={summary}
+              loading={diffLoading}
+              error={diffError}
+              onCommit={async (request: GitCommitRequest) => {
+                const result = await bridge.gitCommit(request);
+                await refreshDiffs();
+                return result;
+              }}
+              onDiscard={async (files) => {
+                await bridge.gitRevert(files);
+                await refreshDiffs();
+              }}
+              onClose={() => setPanel(null)}
+            />
+          ) : null}
+          {panel === 'terminal' ? <TerminalPanel bridge={bridge} onClose={() => setPanel(null)} /> : null}
+          {panel === 'tests' ? <TestRunner bridge={bridge} onClose={() => setPanel(null)} /> : null}
         </div>
       ) : null}
     </div>
