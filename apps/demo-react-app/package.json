@@ -1,7 +1,25 @@
 {
   "name": "demo-react-app",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
-  "description": "Example React app. Implemented in Phase 7.",
-  "type": "module"
+  "description": "React + Vite app for exercising the DevTools overlay and Vite plugin",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1 || ^19.0.0",
+    "react-dom": "^18.3.1 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@ai-devtools/vite-plugin": "workspace:*",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.6"
+  }
 }

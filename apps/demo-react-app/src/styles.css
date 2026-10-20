@@ -1,0 +1,181 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5e574e;
+  --paper: #f4efe6;
+  --card: #fffaf3;
+  --line: #e2d8c8;
+  --accent: #0f6e56;
+  --accent-ink: #f4efe6;
+  --warn: #8a4b08;
+  --danger: #9f1239;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button, a { font: inherit; }
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 24px 120px;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 48px;
+}
+
+.mark {
+  color: inherit;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+
+nav {
+  display: flex;
+  gap: 16px;
+}
+
+nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+nav a:hover { color: var(--ink); }
+
+.hero h1 {
+  max-width: 12ch;
+  margin: 8px 0 12px;
+  font-size: clamp(3rem, 8vw, 5.5rem);
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  line-height: 0.92;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.lede, .lab p, .card-detail {
+  color: var(--muted);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+button, .secondary {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  padding: 10px 16px;
+  text-decoration: none;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.secondary {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.warn, .danger {
+  background: transparent;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.warn { border-color: var(--warn); color: var(--warn); }
+.danger { border-color: var(--danger); color: var(--danger); }
+
+.work { margin-top: 72px; }
+
+.section-heading, .lab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.section-heading h2, .lab h2 {
+  margin: 0;
+  font-weight: 500;
+}
+
+.counter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.counter button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-color: var(--line);
+  background: var(--card);
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.card.selected { border-color: var(--accent); }
+
+.card-name { font-size: 1.2rem; }
+
+.lab {
+  display: block;
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

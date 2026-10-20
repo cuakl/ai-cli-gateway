@@ -1,7 +1,46 @@
 {
   "name": "@ai-devtools/vite-plugin",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
-  "description": "Vite plugin and dev-server bridge. Implemented in Phase 5.",
-  "type": "module"
+  "description": "Vite plugin that injects the DevTools overlay, source locations, and a gateway bridge",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.0",
+    "@babel/traverse": "^7.28.0",
+    "@babel/types": "^7.28.0",
+    "@devtools/overlay": "workspace:*",
+    "@gateway/core": "workspace:*",
+    "@gateway/shared-types": "workspace:*",
+    "magic-string": "^0.30.17",
+    "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "vite": "^5.0.0 || ^6.0.0"
+  },
+  "devDependencies": {
+    "@types/babel__traverse": "^7.20.6",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1 || ^19.0.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4"
+  }
 }
