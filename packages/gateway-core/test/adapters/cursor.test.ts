@@ -1,8 +1,14 @@
 import { mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseCursorLine } from '../../src/adapters/cursor.js';
-import { cleanupCursorEphemeral, createAdapter, CursorAdapter, ProcessManager } from '../../src/index.js';
+import { CursorLineParser, parseCursorLine } from '../../src/adapters/cursor.js';
+import {
+  cleanupCursorEphemeral,
+  createAdapter,
+  CursorAdapter,
+  ProcessManager,
+  type ManagedProcessOptions,
+} from '../../src/index.js';
 import { collectEvents, ensureFixtures, fixture, resolverFor, tempWorkspace } from './helpers.js';
 
 describe('CursorAdapter', () => {
@@ -16,13 +22,17 @@ describe('CursorAdapter', () => {
     const base = { prompt: 'make it emerald', cwd: '/work/demo' };
     expect(adapter.buildArgs(base)).toEqual([
       '-p',
-      'make it emerald',
       '--output-format',
-      'json',
+      'stream-json',
+      '--stream-partial-output',
+      '--trust',
       '--workspace',
       '/work/demo',
       '--force',
+      '--',
+      'make it emerald',
     ]);
+    expect(adapter.buildArgs({ ...base, prompt: '--help' })).toContain('--');
     expect(adapter.buildArgs({ ...base, yolo: true })).toContain('--force');
     expect(adapter.buildArgs({ ...base, yolo: false })).not.toContain('--force');
     expect(adapter.buildArgs({ ...base, yolo: false })).not.toContain('--yolo');
@@ -49,6 +59,38 @@ describe('CursorAdapter', () => {
     );
     expect(aggregate.map((event) => event.type)).toEqual(['chunk', 'file_edit', 'done']);
     expect(aggregate[2]?.payload).toEqual({ durationMs: 5, costUsd: 1 });
+
+    expect(parseCursorLine(JSON.stringify({ type: 'system', subtype: 'init' }), 'sess')).toEqual([]);
+    expect(parseCursorLine(JSON.stringify({ type: 'thinking', subtype: 'delta', text: 'hidden' }), 'sess')).toEqual(
+      [],
+    );
+    expect(parseCursorLine(JSON.stringify({ type: 'user', message: { content: [{ text: 'hi' }] } }), 'sess')).toEqual(
+      [],
+    );
+    const streamed = parseCursorLine(
+      JSON.stringify({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Tinting it.' }] },
+      }),
+      'sess',
+    );
+    expect(streamed[0]).toMatchObject({ type: 'chunk', payload: { text: 'Tinting it.' } });
+    const edit = parseCursorLine(
+      JSON.stringify({
+        type: 'tool_call',
+        subtype: 'completed',
+        tool_call: { tool: { case: 'editToolCall', value: { args: { path: 'src/components/Hero.tsx' } } } },
+      }),
+      'sess',
+    );
+    expect(edit.map((event) => event.type)).toEqual(['tool_call', 'file_edit']);
+    expect(edit[1]?.payload.filePath).toBe('src/components/Hero.tsx');
+    const finished = parseCursorLine(
+      JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 120, result: 'Tinting it.' }),
+      'sess',
+    );
+    expect(finished.map((event) => event.type)).toEqual(['done']);
+    expect(finished[0]?.payload.durationMs).toBe(120);
   });
 
   it('parses mock cursor JSON and dedupes file edits', async () => {
@@ -65,12 +107,13 @@ describe('CursorAdapter', () => {
       );
 
       expect(result.exitCode).toBe(0);
-      expect(result.summary).toBe('cursor statusUpdated hero button');
+      expect(result.summary).toBe('Updated hero button');
       expect(events.map((event) => event.type)).toEqual([
         'init',
         'chunk',
-        'chunk',
+        'tool_call',
         'file_edit',
+        'tool_call',
         'file_edit',
         'done',
         'done',
@@ -79,11 +122,87 @@ describe('CursorAdapter', () => {
         'src/components/Hero.tsx',
         'src/App.tsx',
       ]);
-      expect(events.find((event) => event.type === 'done' && event.payload.costUsd === 0.003)?.payload).toEqual({
+      expect(events.find((event) => event.type === 'done' && event.payload.durationMs === 120)?.payload).toEqual({
         durationMs: 120,
-        costUsd: 0.003,
       });
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('shows a streamed assistant reply once when Cursor repeats the final message', () => {
+    const parser = new CursorLineParser();
+    const partial = JSON.stringify({
+      type: 'assistant',
+      timestamp_ms: 1,
+      message: { content: [{ type: 'text', text: "I'll update the label." }] },
+    });
+    const again = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: "I'll update the label." }] },
+    });
+    const done = JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 5, result: "I'll update the label." });
+    expect(parser.parse(partial, 's').map((event) => event.payload.text)).toEqual(["I'll update the label."]);
+    expect(parser.parse(again, 's')).toEqual([]);
+    expect(parser.parse(done, 's').map((event) => event.type)).toEqual(['done']);
+  });
+
+  it('keeps assistant text when the CLI sends only the final message', () => {
+    const parser = new CursorLineParser();
+    const final = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Updated hero button' }] },
+    });
+    expect(parser.parse(final, 's')[0]?.payload.text).toBe('Updated hero button');
+  });
+
+  it('passes an IDE access token only through the child environment', async () => {
+    const cwd = await tempWorkspace('gateway-cursor-auth-env-');
+    const token = 'cursor-test-token-value-0123456789';
+    const seen: Array<NodeJS.ProcessEnv | undefined> = [];
+    class RecordingManager extends ProcessManager {
+      override start(options: ManagedProcessOptions): Promise<number> {
+        seen.push(options.env);
+        return super.start(options);
+      }
+    }
+    try {
+      const adapter = new CursorAdapter(
+        resolverFor('cursor', fixture('mock-cursor.js')),
+        new RecordingManager(),
+        async () => token,
+      );
+      const result = await adapter.execute({ prompt: 'update the hero', cwd, sessionId: 'sess-auth' }, () => {});
+      expect(result.exitCode).toBe(0);
+      expect(seen).toEqual([{ CURSOR_AUTH_TOKEN: token }]);
+      expect(JSON.stringify(adapter.buildArgs({ prompt: 'update the hero', cwd }))).not.toContain(token);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not replace an explicit Cursor API key', async () => {
+    const cwd = await tempWorkspace('gateway-cursor-auth-explicit-');
+    const previous = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = 'explicit-cursor-key';
+    const seen: Array<NodeJS.ProcessEnv | undefined> = [];
+    class RecordingManager extends ProcessManager {
+      override start(options: ManagedProcessOptions): Promise<number> {
+        seen.push(options.env);
+        return super.start(options);
+      }
+    }
+    try {
+      const adapter = new CursorAdapter(
+        resolverFor('cursor', fixture('mock-cursor.js')),
+        new RecordingManager(),
+        async () => 'cursor-test-token-value-0123456789',
+      );
+      await adapter.execute({ prompt: 'update the hero', cwd, sessionId: 'sess-explicit' }, () => {});
+      expect(seen).toEqual([undefined]);
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous;
       await rm(cwd, { recursive: true, force: true });
     }
   });

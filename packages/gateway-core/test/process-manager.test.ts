@@ -186,7 +186,7 @@ describe('ProcessManager', () => {
     await expect(failure).rejects.toThrow(/not authenticated/);
     await expect(failure).rejects.toThrow(/claude/);
     const auth = events.find((event) => event.type === 'error' && event.payload.error?.includes('not authenticated'));
-    expect(auth?.payload.error).toContain('1. Install Claude Code');
+    expect(auth?.payload.error).toContain('1. Run `claude` and complete login.');
     expect(events.at(-1)?.type).toBe('done');
   });
 

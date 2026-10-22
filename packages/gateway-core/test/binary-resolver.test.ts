@@ -45,9 +45,11 @@ describe('BinaryResolver', () => {
     const home = '/Users/example';
     const candidates = defaultProviderCandidates(home);
 
-    expect(candidates.cursor.commands).toContain('agent');
+    expect(candidates.cursor.commands).toEqual(['agent', 'cursor-agent']);
     expect(candidates.cursor.paths).toContain(join(home, '.cursor', 'bin', 'agent'));
+    expect(candidates.cursor.paths).toContain(join(home, '.local', 'bin', 'cursor-agent'));
     expect(candidates.cursor.paths).toContain('/usr/local/bin/agent');
+    expect(candidates.cursor.commands).not.toContain('cursor');
     expect(candidates.antigravity.commands).toEqual(['agy']);
     expect(candidates.claude.commands).toEqual(['claude']);
     expect(candidates.codex.commands).toEqual(['codex']);

@@ -47,6 +47,11 @@ export abstract class BaseAdapter implements CLIAdapter {
 
   protected async afterExecute(_options: PromptOptions, _sessionId: string): Promise<void> {}
 
+  /** Extra environment for the child. Merged over the gateway process env. */
+  protected async executionEnv(): Promise<NodeJS.ProcessEnv | undefined> {
+    return undefined;
+  }
+
   async execute(
     options: PromptOptions,
     onEvent: (event: UnifiedStreamEvent) => void,
@@ -55,6 +60,7 @@ export abstract class BaseAdapter implements CLIAdapter {
     const command = await this.getBinaryPath();
     const sessionId = parsed.sessionId ?? randomUUID();
     const args = this.buildArgs(parsed);
+    const env = await this.executionEnv();
     const chunks: string[] = [];
 
     onEvent(
@@ -71,6 +77,7 @@ export abstract class BaseAdapter implements CLIAdapter {
         command,
         args,
         cwd: parsed.cwd,
+        ...(env ? { env } : {}),
         ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
         onEvent: (event) => {
           if (event.type === 'chunk' && event.payload.text) chunks.push(event.payload.text);

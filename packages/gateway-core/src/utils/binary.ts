@@ -24,15 +24,16 @@ export interface BinaryResolverOptions {
 export function defaultProviderCandidates(home: string = homedir()): ProviderCandidates {
   return {
     cursor: {
-      commands: ['agent', 'cursor-agent', 'cursor'],
+      commands: ['agent', 'cursor-agent'],
       paths: [
-        join(home, '.cursor', 'bin', 'agent'),
         join(home, '.local', 'bin', 'agent'),
+        join(home, '.local', 'bin', 'cursor-agent'),
+        join(home, '.cursor', 'bin', 'agent'),
+        join(home, '.cursor', 'bin', 'cursor-agent'),
         '/usr/local/bin/agent',
+        '/usr/local/bin/cursor-agent',
         '/opt/homebrew/bin/agent',
-        join(home, '.cursor', 'bin', 'cursor'),
-        '/usr/local/bin/cursor',
-        '/opt/homebrew/bin/cursor',
+        '/opt/homebrew/bin/cursor-agent',
       ],
     },
     antigravity: {
@@ -212,8 +213,8 @@ export function describeAuthFailure(
   if (!AUTH_FAILURE.test(output)) return null;
   const known = ProviderTypeSchema.safeParse(provider);
   const setup = known.success
-    ? providerSetup(known.data)
-    : ['Install the CLI and complete its login, then retry.'];
+    ? providerAuthSetup(known.data)
+    : ['Sign in with the CLI, then retry.'];
   const label = known.success ? providerLabel(known.data) : provider;
   return { message: formatWithSteps(`${label} is not authenticated.`, setup), setup };
 }
@@ -231,6 +232,23 @@ function missingBinaryIntro(provider: ProviderType): string {
     default: {
       const exhaustive: never = provider;
       return `CLI for provider "${exhaustive}" was not found.`;
+    }
+  }
+}
+
+function providerAuthSetup(provider: ProviderType): string[] {
+  switch (provider) {
+    case 'cursor':
+      return ['Run `agent login` and finish sign-in in the browser.'];
+    case 'antigravity':
+      return ['Run `agy` and finish sign-in.'];
+    case 'claude':
+      return ['Run `claude` and complete login.'];
+    case 'codex':
+      return ['Run `codex` and finish sign-in.'];
+    default: {
+      const exhaustive: never = provider;
+      return [`Sign in to the CLI for "${exhaustive}", then retry.`];
     }
   }
 }
