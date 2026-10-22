@@ -17,9 +17,15 @@ export interface StreamPromptInput {
   cwd?: string;
   context?: FrontendContextPayload;
   onChunk?: (text: string) => void;
+  onTool?: (toolName: string, filePath?: string) => void;
   onFileEdit?: (filePath: string) => void;
   onError?: (message: string) => void;
   onDone?: () => void;
+}
+
+export interface ProviderStatus {
+  provider: ProviderType;
+  available: boolean;
 }
 
 /** Git, PTY, and test calls the overlay makes over the Vite HMR socket. */
@@ -41,6 +47,7 @@ export type DevtoolsPanel = 'chat' | 'diffs' | 'terminal' | 'tests';
 /** Small surface the chat drawer needs. Tests substitute a fake. */
 export interface GatewayBridge {
   checkHealth(): Promise<boolean>;
+  listProviders?(): Promise<ProviderStatus[]>;
   streamPrompt(input: StreamPromptInput): Promise<void>;
   cancel(): void;
 }

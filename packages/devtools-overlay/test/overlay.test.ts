@@ -32,6 +32,8 @@ describe('initDevtools', () => {
     const shadow = first?.shadowRoot;
     expect(shadow?.querySelector('#ai-devtools-root')).toBeTruthy();
     expect(shadow?.querySelector('style')?.textContent).toContain('#ai-devtools-root');
+    expect(first?.style.fontFamily).toContain('ui-sans-serif');
+    expect(first?.style.color.toLowerCase()).toBe('#f5f7fb');
     expect(shadow?.querySelector('[data-action="inspect"]')).toBeTruthy();
     expect(document.querySelector('#ai-devtools-root')).toBeNull();
   });

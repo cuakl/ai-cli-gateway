@@ -73,7 +73,10 @@ export function DiffViewer({ summary, loading, error, onCommit, onDiscard, onClo
   return (
     <section className="drawer wide" aria-label="Diffs">
       <header className="drawer-header">
-        <h2>Diffs{summary?.branch ? <span className="muted"> {summary.branch}</span> : null}</h2>
+        <div className="header-copy">
+          <p className="kicker">{summary?.branch ?? 'Working tree'}</p>
+          <h2>Diffs</h2>
+        </div>
         <button type="button" className="icon-button" data-action="close-diffs" onClick={onClose}>
           ✕
         </button>
@@ -174,8 +177,10 @@ function FileDiff({ file }: { file: GitDiffFile }) {
   return (
     <div>
       <div className="diff-file-head">
-        <span>{file.status}</span>
-        <span>{file.path}</span>
+        <span className="file-status">{file.status}</span>
+        <span className="file-path" title={file.path}>
+          {file.path}
+        </span>
       </div>
       {file.binary ? <p className="empty">Binary file.</p> : null}
       {(file.hunks ?? []).map((hunk, index) => (

@@ -11,6 +11,7 @@ import {
   DEFAULT_GATEWAY_URL,
   type GatewayBridge,
   type GatewayTransportMode,
+  type ProviderStatus,
   type StreamPromptInput,
 } from '../types.js';
 
@@ -96,17 +97,32 @@ export class GatewayClient implements GatewayBridge {
   }
 
   async checkHealth(): Promise<boolean> {
+    try {
+      const body = await this.readHealth();
+      return body?.status === 'ok';
+    } catch {
+      return false;
+    }
+  }
+
+  async listProviders(): Promise<ProviderStatus[]> {
+    try {
+      const body = await this.readHealth();
+      return parseProviders(body?.availableProviders);
+    } catch {
+      return [];
+    }
+  }
+
+  private async readHealth(): Promise<HealthBody | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     try {
       const response = await fetch(new URL('/health', `${this.gatewayUrl}/`), {
         signal: controller.signal,
       });
-      if (!response.ok) return false;
-      const body = (await response.json()) as { status?: string };
-      return body.status === 'ok';
-    } catch {
-      return false;
+      if (!response.ok) return null;
+      return (await response.json()) as HealthBody;
     } finally {
       clearTimeout(timer);
     }
@@ -338,9 +354,39 @@ function applyStreamEvent(
   onTerminal: () => void,
 ): void {
   if (event.type === 'chunk' && event.payload.text) input.onChunk?.(event.payload.text);
+  if (event.type === 'tool_call' && event.payload.toolName) {
+    const path = toolPath(event.payload.toolArgs) ?? event.payload.filePath;
+    input.onTool?.(event.payload.toolName, path);
+  }
   if (event.type === 'file_edit') input.onFileEdit?.(event.payload.filePath ?? '');
   if (event.type === 'error') input.onError?.(event.payload.error ?? 'The agent reported an error');
-  if (event.type === 'done' || event.type === 'error') onTerminal();
+  if (event.type === 'done') onTerminal();
+}
+
+const PROVIDER_IDS = new Set(['cursor', 'antigravity', 'claude', 'codex']);
+
+interface HealthBody {
+  status?: string;
+  availableProviders?: Array<{ provider?: string; available?: boolean }>;
+}
+
+function parseProviders(value: HealthBody['availableProviders']): ProviderStatus[] {
+  if (!Array.isArray(value)) return [];
+  const statuses: ProviderStatus[] = [];
+  for (const item of value) {
+    if (!item?.provider || !PROVIDER_IDS.has(item.provider)) continue;
+    statuses.push({ provider: item.provider as ProviderStatus['provider'], available: item.available === true });
+  }
+  return statuses;
+}
+
+function toolPath(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  for (const key of ['path', 'filePath', 'file_path', 'target_file']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
 }
 
 function isAbortError(error: unknown): boolean {

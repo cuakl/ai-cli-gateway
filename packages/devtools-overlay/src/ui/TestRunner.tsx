@@ -40,7 +40,10 @@ export function TestRunner({ bridge, onClose }: TestRunnerProps) {
   return (
     <section className="drawer wide" aria-label="Tests">
       <header className="drawer-header">
-        <h2>Tests</h2>
+        <div className="header-copy">
+          <p className="kicker">Demo suite</p>
+          <h2>Tests</h2>
+        </div>
         <span className="badge" data-status={status}>
           {STATUS_LABEL[status]}
         </span>

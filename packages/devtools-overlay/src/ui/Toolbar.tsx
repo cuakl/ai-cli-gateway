@@ -11,12 +11,15 @@ export function Toolbar({ inspecting, panel, diffCount, status, onToggleInspect,
   return (
     <div className="toolbar" role="toolbar" aria-label="AI DevTools">
       <span className="brand">
+        <span className="brand-mark" aria-hidden="true" />
+        DevTools
         <span
           className="status"
           data-state={status}
-          title={status === 'connected' ? 'Gateway connected' : 'Gateway idle'}
+          role="img"
+          aria-label={status === 'connected' ? 'Gateway connected' : 'Gateway offline'}
+          title={status === 'connected' ? 'Gateway connected' : 'Gateway offline'}
         />
-        AI DevTools
       </span>
       <button type="button" data-action="inspect" aria-pressed={inspecting} onClick={onToggleInspect}>
         Inspect

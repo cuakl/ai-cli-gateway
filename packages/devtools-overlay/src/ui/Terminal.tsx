@@ -41,7 +41,7 @@ export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
           cursorBlink: true,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           fontSize: 12,
-          theme: { background: '#101319', foreground: '#e7e9ee' },
+          theme: { background: '#0e1016', foreground: '#e7edf8', cursor: '#c4b5fd' },
         });
         const fit = new FitAddon();
         term.loadAddon(fit);
@@ -111,7 +111,10 @@ export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
   return (
     <section className="drawer wide" aria-label="Terminal">
       <header className="drawer-header">
-        <h2>Terminal</h2>
+        <div className="header-copy">
+          <p className="kicker">Project shell</p>
+          <h2>Terminal</h2>
+        </div>
         <button type="button" className="icon-button" data-action="close-terminal" onClick={onClose}>
           ✕
         </button>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { GitCommitRequest, GitDiffSummary, ProviderType, SelectedElement } from '@gateway/shared-types';
+import type { ProviderStatus } from '../types.js';
 import { gatherContext } from '../context/index.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
@@ -23,7 +24,9 @@ export function App({ config }: AppProps) {
   const [panel, setPanel] = useState<DevtoolsPanel | null>(null);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
-  const [provider, setProvider] = useState<ProviderType>('antigravity');
+  const [provider, setProvider] = useState<ProviderType>('cursor');
+  const [availability, setAvailability] = useState<Partial<Record<ProviderType, boolean>>>({});
+  const providerTouched = useRef(false);
   const [prompt, setPrompt] = useState('');
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [sending, setSending] = useState(false);
@@ -115,6 +118,13 @@ export function App({ config }: AppProps) {
           if (!cancelled) setStatus('idle');
         },
       );
+      if (!client.listProviders) return;
+      void client.listProviders().then((listed) => {
+        if (cancelled || listed.length === 0) return;
+        setAvailability(availabilityMap(listed));
+        if (providerTouched.current) return;
+        setProvider(preferredProvider(listed));
+      });
     };
     tick();
     const timer = window.setInterval(tick, 5_000);
@@ -160,11 +170,30 @@ export function App({ config }: AppProps) {
         onChunk(chunk) {
           updateAssistant(assistantId, (current) => current + chunk, false);
         },
+        onTool(toolName, filePath) {
+          const label = activityLabel(toolName, filePath);
+          setMessages((current) => {
+            const last = current[current.length - 1];
+            if (last?.role === 'status' && last.text === label) return current;
+            return [...current, { id: createId(), role: 'status', text: label }];
+          });
+        },
         onFileEdit() {
           sawEdit = true;
         },
         onError(message) {
-          updateAssistant(assistantId, (current) => (current ? `${current}\n${message}` : message), true);
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    text: item.text ? `${item.text}\n${message}` : message,
+                    pending: false,
+                    error: true,
+                  }
+                : item,
+            ),
+          );
         },
         onDone() {
           updateAssistant(assistantId, (current) => current || 'The agent finished without text output.', false);
@@ -188,6 +217,11 @@ export function App({ config }: AppProps) {
 
   return (
     <div className="dock">
+      {inspecting ? (
+        <div className="inspect-banner" role="status">
+          Click an element to attach it. Press Esc to cancel.
+        </div>
+      ) : null}
       {notice ? (
         <div className="notice" role="status">
           <span>{notice}</span>
@@ -220,11 +254,16 @@ export function App({ config }: AppProps) {
             <ChatDrawer
               selected={selected}
               provider={provider}
+              availability={availability}
+              gatewayStatus={status}
               prompt={prompt}
               messages={messages}
               sending={sending}
               onPromptChange={setPrompt}
-              onProviderChange={setProvider}
+              onProviderChange={(next) => {
+                providerTouched.current = true;
+                setProvider(next);
+              }}
               onClearSelection={() => {
                 elementRef.current = null;
                 setSelected(null);
@@ -260,6 +299,35 @@ export function App({ config }: AppProps) {
       ) : null}
     </div>
   );
+}
+
+function availabilityMap(listed: ProviderStatus[]): Partial<Record<ProviderType, boolean>> {
+  const next: Partial<Record<ProviderType, boolean>> = {};
+  for (const item of listed) next[item.provider] = item.available;
+  return next;
+}
+
+function preferredProvider(listed: ProviderStatus[]): ProviderType {
+  if (listed.some((item) => item.provider === 'cursor' && item.available)) return 'cursor';
+  return listed.find((item) => item.available)?.provider ?? 'cursor';
+}
+
+function activityLabel(toolName: string, filePath?: string): string {
+  const key = toolName.toLowerCase();
+  const verb = key.includes('write')
+    ? 'Writing'
+    : key.includes('edit') || key.includes('patch') || key.includes('strreplace')
+      ? 'Editing'
+      : key.includes('shell') || key.includes('bash')
+        ? 'Running'
+        : key.includes('read')
+          ? 'Reading'
+          : key.includes('grep') || key.includes('search')
+            ? 'Searching'
+            : toolName;
+  if (!filePath) return verb;
+  const short = filePath.split('/').slice(-2).join('/');
+  return `${verb} ${short}`;
 }
 
 function createId(): string {

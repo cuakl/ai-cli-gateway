@@ -258,10 +258,12 @@ A missing Antigravity CLI looks like this:
 
 | Provider | Command it runs | Lookup order |
 | --- | --- | --- |
-| `cursor` | `agent -p "<prompt>" --output-format json --workspace <cwd> --force` | `agent`, `cursor-agent`, `cursor`, then `~/.cursor/bin` and `~/.local/bin` |
+| `cursor` | `agent -p --output-format stream-json --stream-partial-output --trust --workspace <cwd> --force -- "<prompt>"` | `agent`, `cursor-agent`, then `~/.local/bin` and `~/.cursor/bin` |
 | `antigravity` | `agy --print "<prompt>" --output-format stream-json --workspace <cwd>` | `agy`, then `~/.local/bin` and `~/.antigravity/bin` |
 | `claude` | `claude --bare -p "<prompt>" --output-format stream-json --allowedTools <list> --permission-prompts none` | `claude`, then `~/.local/bin` and `~/.claude/local` |
 | `codex` | `codex exec --jsonl --sandbox workspace-write "<prompt>"` | `codex`, then `~/.local/bin` and `~/.npm-global/bin` |
+
+When `CURSOR_AUTH_TOKEN` and `CURSOR_API_KEY` are unset, the Cursor adapter reads the signed-in IDE access token from Cursor's local state database and passes it to that child as `CURSOR_AUTH_TOKEN`. The gateway does not write the token to disk or include it in logs. `agent login` remains the fallback when the IDE has no session.
 
 Arguments are a discrete argv array. A prompt that contains `;`, `&&`, or quotes is one argument, not a shell command.
 
@@ -301,7 +303,7 @@ There is no API-key variable. Each CLI keeps its own login.
 
 **`provider_unavailable`.** The binary is not on `PATH` and not in the lookup paths above. The response `setup` array is the short version of what to install and which command to run once so the CLI can sign in.
 
-**`cli_auth_required`.** The process started and then asked for login. Run that CLI in a normal terminal and finish its sign-in. The gateway does not store credentials.
+**`cli_auth_required`.** The process started and then asked for login. For Cursor, sign in to the Cursor app and retry, or run `agent login`. Other CLIs need their own sign-in in a normal terminal. The gateway does not store credentials.
 
 **`path_escape`.** `cwd` or a `files` entry resolved outside the authorized root. For the demo, `cwd` should be the `apps/demo-react-app` directory (the plugin injects this). For a server started outside a git checkout, set `GATEWAY_ROOT` to the checkout you want to allow.
 
