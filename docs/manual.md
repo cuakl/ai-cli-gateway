@@ -71,6 +71,14 @@ Suggestions ("Fix layout", "Make responsive", "Add hover state") only fill the b
 
 A conflicted git tree stops the run. A dirty tree is shown as a notice in the chat. After the agent edits files, a notice offers **Review diffs**.
 
+### Undo a run
+
+Each agent-mode run snapshots the project tree first (tracked and untracked files, without touching the working copy) and records the paths it changed. **Undo** on that run restores only those paths to the snapshot: the agent's new files disappear, and a file you had already edited is put back to *your* version, not `HEAD`. Other files, including untracked files the agent never touched, stay put.
+
+Undo is `git.checkpoint.restore { runId }` on the project WebSocket, or `POST /api/v1/runs/:runId/restore`. If a later run in the same project touched the same files, the reply is `conflict_newer_run` unless you pass `"force": true`. Ask and plan runs do not take a snapshot. Repos with no commits skip the snapshot and cannot be undone this way.
+
+The gateway runs at most one agent-mode run per project (further `run.start` requests are accepted as `queued` and start FIFO). Across all projects, `maxConcurrentRuns` in `config.json` (default 4) caps live runs; extra HTTP `/prompt` and `/sessions` requests return 429 with `Retry-After: 5`, while workspace runs queue.
+
 ### Diffs
 
 **Diffs** lists staged, unstaged, and untracked files inside the Vite project. Each file shows additions and deletions. The hunk view is the unified diff.
@@ -208,6 +216,7 @@ curl -s "http://127.0.0.1:4100/api/v1/threads?projectId=proj_…&source=api&limi
 | --- | --- | --- |
 | `GET` | `/api/v1/threads?projectId=&source=&limit=` | `{ threads }` newest first. A browser token is limited to its project. |
 | `GET` | `/api/v1/threads/:id` | `{ thread, runs }` |
+| `POST` | `/api/v1/runs/:runId/restore` | Undo that run's files. Body `{ force?: boolean }`. |
 | `DELETE` | `/api/v1/threads/:id` | Cancels an active run, then deletes both files. |
 | `GET` | `/api/v1/threads/:id/events?runId=` | SSE. Replays stored `{ runId, event }` lines, follows the live run when it is still active, then closes. |
 
@@ -253,6 +262,8 @@ Failures before the process starts are HTTP errors. A CLI that exits non-zero af
 | 400 | `path_escape` | `cwd` or a file resolves outside the caller's project roots, or `cwd` is not a directory. |
 | 400 | `invalid_cwd` | The directory disappeared between the check and process start. |
 | 409 | `session_exists` | That `sessionId` is already registered. |
+| 409 | `conflict_newer_run` | Undo of a run whose files a later run also touched. Pass `"force": true` to restore anyway. |
+| 429 | `too_many_runs` | `maxConcurrentRuns` live runs already. `Retry-After` is 5 seconds. |
 | 422 | `provider_unavailable` | The binary is missing, or the provider name is unknown. `setup` is a list of steps. |
 | 422 | `cli_auth_required` | The CLI exited and its output asked for login. `setup` lists the sign-in steps. |
 | 504 | `timeout` | The watchdog fired. The process was sent `SIGTERM`, then `SIGKILL`. |

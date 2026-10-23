@@ -6,7 +6,17 @@ import { promisify } from 'node:util';
 import { simpleGit } from 'simple-git';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GitDiffSummarySchema } from '@aidev/protocol';
-import { commit, getDiff, inspectWorkingTree, parseUnifiedDiff, revert } from '../src/workspace/git-service.js';
+import {
+  checkpointRef,
+  commit,
+  createCheckpoint,
+  filesChangedSinceCheckpoint,
+  getDiff,
+  inspectWorkingTree,
+  parseUnifiedDiff,
+  restoreCheckpointFiles,
+  revert,
+} from '../src/workspace/git-service.js';
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -154,6 +164,39 @@ rename to new.txt
     expect(await readFile(path.join(dir, 'keep.txt'), 'utf8')).toBe('stay\n');
     await expect(readFile(path.join(dir, 'drop.txt'))).rejects.toThrow();
     expect(await readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('hello\nchanged\n');
+  });
+
+  it('snapshots untracked files and restores only listed paths', async () => {
+    const dir = await createRepo();
+    await writeFile(path.join(dir, 'app.txt'), 'hello\nuser\n');
+    await writeFile(path.join(dir, 'notes.txt'), 'scratch\n');
+    const checkpoint = await createCheckpoint(dir, 'run_ckpt1');
+    expect(checkpoint).toMatchObject({
+      ref: checkpointRef('run_ckpt1'),
+      dirtyBefore: expect.arrayContaining(['app.txt', 'notes.txt']),
+    });
+    expect(checkpoint?.baseHead).toMatch(/^[0-9a-f]{7,}$/);
+
+    await writeFile(path.join(dir, 'app.txt'), 'hello\nuser\nagent\n');
+    await writeFile(path.join(dir, 'agent.txt'), 'created\n');
+    const touched = await filesChangedSinceCheckpoint(dir, checkpoint!, ['agent.txt']);
+    expect(touched).toEqual(expect.arrayContaining(['app.txt', 'agent.txt']));
+    expect(touched).not.toContain('notes.txt');
+
+    await restoreCheckpointFiles(dir, checkpoint!, touched);
+    expect(await readFile(path.join(dir, 'app.txt'), 'utf8')).toBe('hello\nuser\n');
+    expect(await readFile(path.join(dir, 'notes.txt'), 'utf8')).toBe('scratch\n');
+    await expect(readFile(path.join(dir, 'agent.txt'))).rejects.toThrow();
+  });
+
+  it('skips checkpoints when the directory has no commits', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ai-devtools-empty-'));
+    roots.push(dir);
+    const git = simpleGit(dir);
+    await git.init(['-b', 'main']);
+    await git.addConfig('user.name', 'DevTools Test');
+    await git.addConfig('user.email', 'devtools@example.com');
+    expect(await createCheckpoint(dir, 'run_empty1')).toBeNull();
   });
 
   it('refuses to discard a symlink whose target leaves the project', async () => {

@@ -66,6 +66,8 @@ export interface ThreadStore {
   createThread(input: CreateThreadInput): Promise<Thread>;
   /** Thread plus its runs, or `undefined` when the file is absent. */
   getThread(threadId: string): Promise<{ thread: Thread; runs: Run[] } | undefined>;
+  /** Scan thread files for a run id. */
+  findRun(runId: string): Promise<{ thread: Thread; run: Run } | undefined>;
   /** Newest `updatedAt` first. */
   listThreads(query: ListThreadsQuery): Promise<Thread[]>;
   /**
@@ -119,6 +121,21 @@ export class FileThreadStore implements ThreadStore {
 
   getThread(threadId: string): Promise<{ thread: Thread; runs: Run[] } | undefined> {
     return Promise.resolve(this.readSync(threadId));
+  }
+
+  findRun(runId: string): Promise<{ thread: Thread; run: Run } | undefined> {
+    if (!/^run_[A-Za-z0-9_-]+$/.test(runId)) return Promise.resolve(undefined);
+    for (const id of this.threadIds()) {
+      try {
+        const record = this.readSync(id);
+        const run = record?.runs.find((item) => item.id === runId);
+        if (record && run) return Promise.resolve({ thread: record.thread, run });
+      } catch (error) {
+        if (!(error instanceof ThreadStoreError)) throw error;
+        logger.error(error.message);
+      }
+    }
+    return Promise.resolve(undefined);
   }
 
   listThreads(query: ListThreadsQuery): Promise<Thread[]> {

@@ -5,6 +5,8 @@ import {
   type ContextSummary,
   type ImageAttachment,
   type Run,
+  type RunCheckpoint,
+  type RunMode,
   type SessionStatus,
   type UnifiedStreamEvent,
 } from '@aidev/protocol';
@@ -18,6 +20,8 @@ export interface ThreadRunBinding {
   startedAt: number;
   contextSummary: ContextSummary | null;
   attachments: ImageAttachment[];
+  mode: RunMode;
+  checkpoint: RunCheckpoint | null;
 }
 
 export function newThreadId(): string {
@@ -33,12 +37,17 @@ export function threadTitle(prompt: string): string {
   return prompt.replace(/\s+/g, ' ').trim().slice(0, 80);
 }
 
+export function isAgentMode(mode: RunMode | undefined): boolean {
+  return mode !== 'ask' && mode !== 'plan';
+}
+
 export function runningRun(input: {
   threadId: string;
   prompt: string;
   contextSummary: ContextSummary | null;
   attachments: ImageAttachment[];
   startedAt?: number;
+  status?: Extract<Run['status'], 'queued' | 'running'>;
 }): Run {
   return RunSchema.parse({
     id: newRunId(),
@@ -46,7 +55,7 @@ export function runningRun(input: {
     prompt: input.prompt,
     contextSummary: input.contextSummary,
     attachments: input.attachments,
-    status: 'running',
+    status: input.status ?? 'running',
     startedAt: input.startedAt ?? Date.now(),
     endedAt: null,
     checkpoint: null,
@@ -63,15 +72,18 @@ export function runFromOutcome(
     exitCode: number;
     events: UnifiedStreamEvent[];
   },
+  extras: { filesTouched?: string[]; checkpoint?: RunCheckpoint | null } = {},
   endedAt = Date.now(),
 ): Run {
-  const filesTouched = [
-    ...new Set(
-      outcome.events.flatMap((event) =>
-        event.type === 'file_edit' && event.payload.filePath ? [event.payload.filePath] : [],
+  const filesTouched =
+    extras.filesTouched ??
+    [
+      ...new Set(
+        outcome.events.flatMap((event) =>
+          event.type === 'file_edit' && event.payload.filePath ? [event.payload.filePath] : [],
+        ),
       ),
-    ),
-  ];
+    ];
   const status = runStatus(outcome.status, outcome.exitCode);
   const errorEvent = [...outcome.events].reverse().find((event) => event.type === 'error');
   const done = outcome.events.find((event) => event.type === 'done');
@@ -86,7 +98,7 @@ export function runFromOutcome(
     status,
     startedAt: binding.startedAt,
     endedAt,
-    checkpoint: null,
+    checkpoint: extras.checkpoint !== undefined ? extras.checkpoint : binding.checkpoint,
     filesTouched,
     error:
       status === 'succeeded' || !errorText

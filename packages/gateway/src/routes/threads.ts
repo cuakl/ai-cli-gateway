@@ -1,4 +1,5 @@
 import {
+  RestoreRunRequestSchema,
   RunIdSchema,
   ThreadIdSchema,
   ThreadSourceSchema,
@@ -12,6 +13,7 @@ import { requirePrincipal, sendForbidden, type Principal } from '../auth/princip
 import { HttpError, sendHttpError } from '../errors.js';
 import { formatThreadSseEvent } from '../sse.js';
 import { deleteThreadFully } from '../threads/control.js';
+import { restoreRun } from '../threads/restore.js';
 import { ThreadStoreError } from '../threads/store.js';
 import type { ActiveRun } from '../threads/active.js';
 import type { ServerDeps } from '../types.js';
@@ -28,6 +30,10 @@ const ParamsSchema = z.object({
 
 const EventsQuerySchema = z.object({
   runId: RunIdSchema.optional(),
+});
+
+const RunParamsSchema = z.object({
+  runId: RunIdSchema,
 });
 
 export function threadVisible(principal: Principal, thread: Thread): boolean {
@@ -82,6 +88,27 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ServerDeps): vo
     }
   });
 
+  app.post('/api/v1/runs/:runId/restore', async (request, reply) => {
+    try {
+      const principal = requirePrincipal(request);
+      const runId = readRunId(request);
+      const found = await deps.threads.findRun(runId);
+      if (!found) {
+        return reply.code(404).send({ error: 'not_found', message: `Run ${runId} was not found` });
+      }
+      if (!threadVisible(principal, found.thread)) return sendForbidden(reply);
+      const body = RestoreRunRequestSchema.safeParse(request.body ?? {});
+      if (!body.success) {
+        const issue = body.error.issues[0];
+        throw new HttpError(400, 'validation_error', issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : 'Invalid body');
+      }
+      const restored = await restoreRun(deps, runId, { force: body.data.force });
+      return { runId: restored.runId, files: restored.files };
+    } catch (error) {
+      return sendFailure(reply, error);
+    }
+  });
+
   app.get('/api/v1/threads/:id/events', async (request, reply) => {
     try {
       const principal = requirePrincipal(request);
@@ -119,6 +146,12 @@ function readThreadId(request: FastifyRequest): string {
   const parsed = ParamsSchema.safeParse(request.params);
   if (!parsed.success) throw new HttpError(400, 'validation_error', 'A thread id is required');
   return parsed.data.id;
+}
+
+function readRunId(request: FastifyRequest): string {
+  const parsed = RunParamsSchema.safeParse(request.params);
+  if (!parsed.success) throw new HttpError(400, 'validation_error', 'A run id is required');
+  return parsed.data.runId;
 }
 
 function readRunFilter(request: FastifyRequest): string | undefined {

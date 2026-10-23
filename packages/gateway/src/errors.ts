@@ -1,4 +1,5 @@
 import type { FastifyReply } from 'fastify';
+import { RETRY_AFTER_SECONDS } from './threads/scheduler.js';
 
 export class HttpError extends Error {
   readonly statusCode: number;
@@ -15,6 +16,7 @@ export class HttpError extends Error {
 }
 
 export function sendHttpError(reply: FastifyReply, error: HttpError) {
+  if (error.statusCode === 429) reply.header('Retry-After', String(RETRY_AFTER_SECONDS));
   const setup = stringList(error.details);
   return reply.code(error.statusCode).send({
     error: error.code,

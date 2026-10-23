@@ -98,6 +98,8 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
   }),
   withType('git.checkpoint.restore', {
     runId: RunIdSchema,
+    /** Skip the newer-run overlap check. */
+    force: z.boolean().optional(),
   }),
   withType('git.log', {
     limit: z.number().int().positive(),
@@ -157,6 +159,8 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
   }),
   withType('project.activity', {
     activeRuns: z.number().int().nonnegative(),
+    /** Agent (and capacity) waiters that have been accepted but not started. */
+    queuedRuns: z.number().int().nonnegative().optional(),
   }),
   withType('git.changed', {
     summary: GitDiffSummarySchema,

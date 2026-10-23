@@ -6,7 +6,7 @@ import { registerAuthGuard } from './auth/guard.js';
 import { AuthService } from './auth/principal.js';
 import { resolveConfig } from './config.js';
 import { HttpError, sendHttpError } from './errors.js';
-import { ensureHome, resolveAidevHome } from './home.js';
+import { ensureHome, readConfig, resolveAidevHome } from './home.js';
 import { ProjectRegistry } from './projects/registry.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerHealthRoutes } from './routes/health.js';
@@ -18,10 +18,12 @@ import { registerThreadRoutes } from './routes/threads.js';
 import { createDefaultRuntime, type GatewayRuntime } from './runtime.js';
 import { SessionRegistry } from './sessions/registry.js';
 import { ActiveRuns } from './threads/active.js';
+import { DEFAULT_MAX_CONCURRENT_RUNS, RunScheduler } from './threads/scheduler.js';
 import { startRetention } from './threads/retention.js';
 import { FileThreadStore } from './threads/store.js';
 import type { ServerDeps } from './types.js';
 import { registerWebSocketRoutes } from './ws/handler.js';
+import { WorkspaceHub } from './ws/hub.js';
 import { registerWorkspaceRoutes } from './ws/workspace.js';
 
 export { CLI_NAME, HOME_DIRNAME, PRODUCT_NAME, SCOPE } from './brand.js';
@@ -55,6 +57,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   }
   const home = options.home ?? resolveAidevHome();
   const ensured = await ensureHome(home);
+  const config = await readConfig(home);
   const projects = new ProjectRegistry(home);
   await projects.load();
   if (options.root) await projects.register({ root: options.root });
@@ -66,6 +69,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     auth: new AuthService(ensured.token, projects),
     threads: new FileThreadStore(home),
     runs: new ActiveRuns(),
+    scheduler: new RunScheduler(config.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS),
+    hub: new WorkspaceHub(),
     bindHost: options.host ?? '127.0.0.1',
     ...(options.root ? { root: options.root } : {}),
   };

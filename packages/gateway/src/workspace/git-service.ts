@@ -1,5 +1,8 @@
-import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { PathEscapeError, confineToRoot } from '@aidev/adapters';
 import {
   GitDiffSummarySchema,
@@ -11,8 +14,12 @@ import {
   type GitFileStatus,
   type GitLogEntry,
   type GitStatus,
+  type RunCheckpoint,
 } from '@aidev/protocol';
 import { simpleGit, type FileStatusResult, type SimpleGit } from 'simple-git';
+
+const exec = promisify(execFile);
+const BLOB_LIMIT = 20 * 1024 * 1024;
 
 const TEXT_LIMIT = 1_500_000;
 
@@ -180,6 +187,127 @@ export async function inspectWorkingTree(rootDir: string): Promise<WorkingTreeRe
     if (code === 'ENOENT' || /not a git repository/i.test(message)) {
       return { clean: true, conflicted: [], dirty: [] };
     }
+    throw error;
+  }
+}
+
+export function checkpointRef(runId: string): string {
+  return `refs/aidev/checkpoints/${runId}`;
+}
+
+/**
+ * Snapshot the project working tree (tracked + untracked, not ignored) without
+ * touching the real index or files. Uses a private `GIT_INDEX_FILE`, `git add -A`
+ * of the project scope, then `write-tree` + `commit-tree` parented at HEAD.
+ *
+ * `git stash create` is not enough: it ignores untracked files, so undo could
+ * not put a dirty untracked file back. Repos with no commits return `null`
+ * and the run proceeds without a checkpoint.
+ */
+export async function createCheckpoint(rootDir: string, runId: string): Promise<RunCheckpoint | null> {
+  let repo: RepoContext;
+  try {
+    repo = await openRepo(rootDir);
+  } catch (error) {
+    if (isMissingRepo(error)) return null;
+    throw error;
+  }
+  const head = await readHead(repo);
+  if (!head) return null;
+  const dirtyBefore = await dirtyProjectPaths(repo);
+  const indexDir = await mkdtemp(path.join(tmpdir(), 'aidev-ckpt-'));
+  const indexFile = path.join(indexDir, 'index');
+  const env = checkpointEnv(indexFile);
+  try {
+    await git(repo.top, ['read-tree', head], env);
+    await git(repo.top, ['add', '-A', '--', repo.scope], env);
+    const tree = await git(repo.top, ['write-tree'], env);
+    if (!tree) throw new Error('git write-tree produced no tree');
+    const commit = await git(repo.top, ['commit-tree', tree, '-p', head, '-m', `aidev checkpoint ${runId}`], env);
+    if (!commit) throw new Error('git commit-tree produced no commit');
+    const ref = checkpointRef(runId);
+    await git(repo.top, ['update-ref', ref, commit]);
+    return { ref, baseHead: head, dirtyBefore };
+  } finally {
+    await rm(indexDir, { recursive: true, force: true });
+  }
+}
+
+/** Project-relative paths whose working-tree bytes differ from the snapshot, plus `fileEditPaths`. */
+export async function filesChangedSinceCheckpoint(
+  rootDir: string,
+  checkpoint: RunCheckpoint,
+  fileEditPaths: string[] = [],
+): Promise<string[]> {
+  const repo = await openRepo(rootDir);
+  const dirtyNow = await dirtyProjectPaths(repo);
+  const inSnapshot = await snapshotProjectPaths(repo, checkpoint.ref);
+  const extras = await Promise.all(fileEditPaths.map((file) => normalizeProjectPath(repo, file)));
+  const candidates = unique([
+    ...dirtyNow,
+    ...checkpoint.dirtyBefore,
+    ...inSnapshot,
+    ...extras.filter((file): file is string => Boolean(file)),
+  ]);
+  const touched: string[] = [];
+  for (const projectPath of candidates) {
+    const repoPath = toRepoPath(repo.scope, projectPath);
+    if (!inScope(repo.scope, repoPath)) continue;
+    const before = await snapshotBlob(repo, checkpoint.ref, repoPath);
+    const after = await workingBlob(repo, repoPath);
+    if (!blobsEqual(before, after)) touched.push(projectPath);
+  }
+  for (const extra of extras) {
+    if (extra && !touched.includes(extra) && inScope(repo.scope, toRepoPath(repo.scope, extra))) {
+      touched.push(extra);
+    }
+  }
+  return unique(touched).sort();
+}
+
+/**
+ * Rewrite only `files` from the checkpoint snapshot. Paths missing from the
+ * snapshot are deleted. The real git index is left alone so a user's untracked
+ * file stays untracked after undo.
+ */
+export async function restoreCheckpointFiles(
+  rootDir: string,
+  checkpoint: RunCheckpoint,
+  files: string[],
+): Promise<string[]> {
+  if (files.length === 0) return [];
+  const repo = await openRepo(rootDir);
+  const restored: string[] = [];
+  for (const file of files) {
+    const projectPath = await normalizeProjectPath(repo, file);
+    if (!projectPath) continue;
+    const repoPath = await assertInProject(repo, projectPath);
+    const blob = await snapshotBlob(repo, checkpoint.ref, repoPath);
+    const absolute = await confineToRoot(repo.projectRoot, projectPath, repo.projectRoot);
+    if (blob === null) {
+      await removePath(absolute);
+    } else {
+      await mkdir(path.dirname(absolute), { recursive: true });
+      await writeFile(absolute, blob);
+    }
+    restored.push(projectPath);
+  }
+  return restored;
+}
+
+export async function deleteCheckpointRef(rootDir: string, runId: string): Promise<void> {
+  let repo: RepoContext;
+  try {
+    repo = await openRepo(rootDir);
+  } catch (error) {
+    if (isMissingRepo(error)) return;
+    throw error;
+  }
+  try {
+    await git(repo.top, ['update-ref', '-d', checkpointRef(runId)]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (/unable to delete|not exist|ambiguous argument/i.test(message)) return;
     throw error;
   }
 }
@@ -567,4 +695,128 @@ function isDiffBodyLine(line: string): boolean {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+async function dirtyProjectPaths(repo: RepoContext): Promise<string[]> {
+  const status = await repo.git.status(['--', repo.scope]);
+  return unique([...status.files.map((entry) => entry.path), ...status.not_added])
+    .filter((repoPath) => inScope(repo.scope, repoPath))
+    .map((repoPath) => toProjectPath(repo.scope, repoPath));
+}
+
+async function snapshotProjectPaths(repo: RepoContext, ref: string): Promise<string[]> {
+  const raw = await git(repo.top, ['ls-tree', '-r', '--name-only', ref]);
+  if (!raw) return [];
+  return raw
+    .split('\n')
+    .filter((repoPath) => repoPath && inScope(repo.scope, repoPath))
+    .map((repoPath) => toProjectPath(repo.scope, repoPath));
+}
+
+async function snapshotBlob(repo: RepoContext, ref: string, repoPath: string): Promise<Buffer | null> {
+  try {
+    await git(repo.top, ['cat-file', '-e', `${ref}:${repoPath}`]);
+  } catch {
+    return null;
+  }
+  return gitBuffer(repo.top, ['show', `${ref}:${repoPath}`]);
+}
+
+async function workingBlob(repo: RepoContext, repoPath: string): Promise<Buffer | null> {
+  const absolute = path.resolve(repo.top, repoPath);
+  if (!lexicalInside(repo.projectRoot, absolute)) return null;
+  try {
+    const info = await lstat(absolute);
+    if (info.isSymbolicLink() || info.isDirectory()) return null;
+    if (!info.isFile()) return null;
+    return await readFile(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function blobsEqual(left: Buffer | null, right: Buffer | null): boolean {
+  if (left === null && right === null) return true;
+  if (left === null || right === null) return false;
+  return left.equals(right);
+}
+
+async function normalizeProjectPath(repo: RepoContext, file: string): Promise<string | undefined> {
+  const trimmed = file.split('\\').join('/').trim();
+  if (!trimmed) return undefined;
+  try {
+    const relative = path.isAbsolute(trimmed)
+      ? path.relative(repo.projectRoot, trimmed)
+      : trimmed;
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return undefined;
+    await assertInProject(repo, relative);
+    return relative.split(path.sep).join('/');
+  } catch {
+    return undefined;
+  }
+}
+
+function inScope(scope: string, repoPath: string): boolean {
+  if (scope === '.' || scope === '') return true;
+  return repoPath === scope || repoPath.startsWith(`${scope}/`);
+}
+
+async function readHead(repo: RepoContext): Promise<string | null> {
+  try {
+    const head = (await repo.git.revparse(['HEAD'])).trim();
+    if (!head || head === 'HEAD') return null;
+    return head;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (/unknown revision|bad revision|needed a single revision|ambiguous argument 'HEAD'/i.test(message)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isMissingRepo(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || /not a git repository/i.test(message);
+}
+
+function checkpointEnv(indexFile: string): NodeJS.ProcessEnv {
+  return {
+    GIT_INDEX_FILE: indexFile,
+    GIT_AUTHOR_NAME: 'aidev',
+    GIT_AUTHOR_EMAIL: 'aidev@localhost',
+    GIT_COMMITTER_NAME: 'aidev',
+    GIT_COMMITTER_EMAIL: 'aidev@localhost',
+  };
+}
+
+async function git(top: string, args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<string> {
+  const { stdout } = await exec('git', args, {
+    cwd: top,
+    maxBuffer: BLOB_LIMIT,
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+  });
+  return (typeof stdout === 'string' ? stdout : Buffer.from(stdout).toString('utf8')).trim();
+}
+
+function gitBuffer(top: string, args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd: top, encoding: 'buffer', maxBuffer: BLOB_LIMIT }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+    });
+  });
+}
+
+async function removePath(absolute: string): Promise<void> {
+  try {
+    const info = await lstat(absolute);
+    if (info.isDirectory()) await rm(absolute, { recursive: true, force: true });
+    else await unlink(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
 }

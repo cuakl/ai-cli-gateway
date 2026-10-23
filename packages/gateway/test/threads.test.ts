@@ -216,7 +216,7 @@ describe('thread HTTP, retention, and SSE', () => {
     expect(stream.status).toBe(200);
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
     const replayed = await collectThreadSse(stream);
-    expect(replayed.map((item) => item.event.type)).toEqual(['init', 'chunk', 'done']);
+    expect(replayed.map((item) => item.event.type)).toEqual(['init', 'chunk', 'files_changed', 'done']);
     expect(replayed[1]?.event.payload.text).toBe('persisted');
   });
 
@@ -273,7 +273,7 @@ describe('thread HTTP, retention, and SSE', () => {
     expect(stored.some((item) => item.event.id === earlyId)).toBe(true);
     release();
     const events = await finished;
-    expect(events.map((item) => item.event.type)).toEqual(['init', 'chunk', 'chunk', 'done']);
+    expect(events.map((item) => item.event.type)).toEqual(['init', 'chunk', 'chunk', 'files_changed', 'done']);
     expect(events[2]?.event.payload.text).toBe('late');
     expect(events.every((item) => item.runId.startsWith('run_'))).toBe(true);
   });

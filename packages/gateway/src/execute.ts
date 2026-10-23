@@ -14,15 +14,19 @@ import {
   type PromptOptions,
   type PromptRequest,
   type Run,
+  type RunCheckpoint,
+  type RunMode,
   type SessionStatus,
   type UnifiedStreamEvent,
 } from '@aidev/protocol';
 import type { Principal } from './auth/principal.js';
 import { HttpError } from './errors.js';
 import type { SessionRegistry } from './sessions/registry.js';
-import { projectForPath, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from './threads/run.js';
+import { isAgentMode, projectForPath, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from './threads/run.js';
+import type { RunLease } from './threads/scheduler.js';
 import type { ThreadPatch } from './threads/store.js';
 import type { ServerDeps } from './types.js';
+import { createCheckpoint, filesChangedSinceCheckpoint } from './workspace/git-service.js';
 
 export interface ExecutionOutcome {
   sessionId: string;
@@ -45,6 +49,13 @@ export interface StartExecutionOptions {
    * They are not copied into the session buffer.
    */
   prelude?: UnifiedStreamEvent[];
+  /**
+   * When true, wait for a scheduler slot (workspace). When false, throw 429 if
+   * the process is at `maxConcurrentRuns` or the project already has an agent run.
+   */
+  queue?: boolean;
+  /** Slot already held by the caller (workspace acquire). Released when the run ends. */
+  heldLease?: RunLease;
 }
 
 export interface StartedExecution {
@@ -53,9 +64,9 @@ export interface StartedExecution {
 }
 
 /**
- * Resolve the CLI, record a running session, and execute in the background.
- * The returned promise settles when the child exits; callers that stream do
- * not need to await it before telling the client the session id.
+ * Take a scheduler slot, then start the CLI. Workspace passes a `heldLease`.
+ * HTTP callers omit it and receive 429 when the cap is hit.
+ * The returned promise settles when the child exits.
  */
 export async function startExecution(
   deps: ServerDeps,
@@ -66,6 +77,45 @@ export async function startExecution(
 ): Promise<StartedExecution> {
   if (!principal) throw new HttpError(401, 'unauthorized', 'A bearer token is required');
   const prompt = await confineRequest(deps, request, principal);
+  const mode: RunMode = prompt.mode ?? 'agent';
+  const project = projectForPath(deps.projects, prompt.cwd);
+  const projectId = project?.id ?? null;
+  const lease = await takeLease(deps, projectId, mode, options);
+  try {
+    const started = await spawnExecution(deps, prompt, sessionId, options);
+    void started.done.finally(() => lease.release());
+    return started;
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+}
+
+async function takeLease(
+  deps: ServerDeps,
+  projectId: string | null,
+  mode: RunMode,
+  options: StartExecutionOptions,
+): Promise<RunLease> {
+  if (options.heldLease) return options.heldLease;
+  if (options.queue) {
+    const runId = options.binding?.runId ?? `run_anon_${randomUUID()}`;
+    return deps.scheduler.acquire(projectId, mode, runId);
+  }
+  const lease = deps.scheduler.tryAcquire(projectId, mode);
+  if (!lease) {
+    throw new HttpError(429, 'too_many_runs', 'Too many concurrent runs');
+  }
+  return lease;
+}
+
+async function spawnExecution(
+  deps: ServerDeps,
+  prompt: PromptRequest,
+  sessionId: string,
+  options: StartExecutionOptions,
+): Promise<StartedExecution> {
+  if (options.binding) await markRunRunning(deps, options.binding);
   const adapter = await prepareAdapter(deps, prompt, sessionId);
   const binding = options.binding ?? (options.recordApi ? await createApiBinding(deps, prompt) : undefined);
   try {
@@ -81,6 +131,9 @@ export async function startExecution(
     throw error;
   }
   logger.info(`session ${sessionId} started (${prompt.provider})`);
+  if (binding && isAgentMode(prompt.mode)) {
+    await recordCheckpoint(deps, prompt.cwd, binding, sessionId);
+  }
   let settle = (): void => {};
   const settled = new Promise<void>((resolve) => {
     settle = resolve;
@@ -101,6 +154,47 @@ export async function startExecution(
       })
     : execution;
   return { sessionId, done };
+}
+
+async function markRunRunning(deps: ServerDeps, binding: ThreadRunBinding): Promise<void> {
+  try {
+    const record = await deps.threads.getThread(binding.threadId);
+    const run = record?.runs.find((item) => item.id === binding.runId);
+    if (run && run.status === 'queued') {
+      await deps.threads.updateRun(binding.threadId, { ...run, status: 'running' });
+    }
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : 'queued run was not marked running');
+  }
+}
+
+async function recordCheckpoint(
+  deps: ServerDeps,
+  cwd: string,
+  binding: ThreadRunBinding,
+  sessionId: string,
+): Promise<UnifiedStreamEvent | undefined> {
+  try {
+    const checkpoint = await createCheckpoint(cwd, binding.runId);
+    if (!checkpoint) return undefined;
+    binding.checkpoint = checkpoint;
+    const current = await deps.threads.getThread(binding.threadId);
+    const existing = current?.runs.find((item) => item.id === binding.runId);
+    if (existing) {
+      await deps.threads.updateRun(binding.threadId, { ...existing, checkpoint });
+    }
+    const event = createStreamEvent(sessionId, 'checkpoint', { ref: checkpoint.ref });
+    try {
+      await deps.threads.appendEvent(binding.threadId, binding.runId, event);
+    } catch (error) {
+      logger.error(error instanceof Error ? error.message : 'checkpoint event was not stored');
+    }
+    deps.registry.append(sessionId, event);
+    return event;
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : 'checkpoint failed');
+    return undefined;
+  }
 }
 
 /**
@@ -197,13 +291,19 @@ async function executeSession(
       logger.error(error instanceof Error ? error.message : 'thread event was not stored');
     }
   };
-  if (prelude) {
-    for (const event of prelude) persist(event);
-  }
-  const publish = (event: UnifiedStreamEvent): void => {
+  const agent = isAgentMode(request.mode);
+  let heldDone: UnifiedStreamEvent | undefined;
+  const publish = (event: UnifiedStreamEvent, flushDone = false): void => {
+    if (agent && event.type === 'done' && !flushDone) {
+      if (!heldDone) heldDone = event;
+      return;
+    }
     persist(event);
     registry.append(sessionId, event);
   };
+  if (prelude) {
+    for (const event of prelude) publish(event);
+  }
   try {
     const result = await adapter.execute(toPromptOptions(request, sessionId), publish);
     const status: SessionStatus =
@@ -212,7 +312,8 @@ async function executeSession(
         : result.exitCode === 0
           ? 'completed'
           : 'failed';
-    ensureTerminalEvents(registry, sessionId, undefined, publish);
+    const filesTouched = await finishAgentEvents(deps, request, sessionId, binding, heldDone, publish);
+    if (!agent) ensureTerminalEvents(registry, sessionId, undefined, (event) => publish(event));
     const record = registry.finish(sessionId, { status, exitCode: result.exitCode });
     logger.info(`session ${sessionId} ${record?.status ?? status} (exit ${result.exitCode})`);
     const outcome: ExecutionOutcome = {
@@ -222,11 +323,12 @@ async function executeSession(
       events: registry.events(sessionId) ?? [],
       status: record?.status ?? status,
     };
-    if (binding) outcome.run = await saveRun(deps, binding, outcome);
+    if (binding) outcome.run = await saveRun(deps, binding, outcome, filesTouched);
     return outcome;
   } catch (error) {
     const status = statusForError(registry.get(sessionId)?.status, error);
-    ensureTerminalEvents(registry, sessionId, error, publish);
+    const filesTouched = await finishAgentEvents(deps, request, sessionId, binding, heldDone, publish, error);
+    if (!agent) ensureTerminalEvents(registry, sessionId, error, (event) => publish(event));
     const record = registry.finish(sessionId, { status, exitCode: 1 });
     const message = error instanceof Error ? error.message : 'Prompt execution failed';
     logger.error(`session ${sessionId} ${status}: ${message}`);
@@ -238,7 +340,7 @@ async function executeSession(
       status: record?.status ?? status,
       error,
     };
-    if (binding) outcome.run = await saveRun(deps, binding, outcome);
+    if (binding) outcome.run = await saveRun(deps, binding, outcome, filesTouched);
     return outcome;
   }
 }
@@ -283,13 +385,54 @@ function ensureTerminalEvents(
   }
 }
 
+async function finishAgentEvents(
+  deps: ServerDeps,
+  request: PromptRequest,
+  sessionId: string,
+  binding: ThreadRunBinding | undefined,
+  heldDone: UnifiedStreamEvent | undefined,
+  publish: (event: UnifiedStreamEvent, flushDone?: boolean) => void,
+  error?: unknown,
+): Promise<string[] | undefined> {
+  if (!isAgentMode(request.mode)) return undefined;
+  const current = deps.registry.events(sessionId) ?? [];
+  if (error !== undefined && !current.some((event) => event.type === 'error')) {
+    const message = error instanceof Error ? error.message : 'Prompt execution failed';
+    publish(createStreamEvent(sessionId, 'error', { error: message }));
+  }
+  const events = deps.registry.events(sessionId) ?? [];
+  const fileEdits = events.flatMap((event) =>
+    event.type === 'file_edit' && event.payload.filePath ? [event.payload.filePath] : [],
+  );
+  const filesTouched = await computeFilesTouched(request.cwd, binding?.checkpoint ?? null, fileEdits);
+  publish(createStreamEvent(sessionId, 'files_changed', { files: filesTouched }));
+  publish(heldDone ?? createStreamEvent(sessionId, 'done', {}), true);
+  return filesTouched;
+}
+
+async function computeFilesTouched(
+  cwd: string,
+  checkpoint: RunCheckpoint | null,
+  fileEditPaths: string[],
+): Promise<string[]> {
+  if (checkpoint) {
+    try {
+      return await filesChangedSinceCheckpoint(cwd, checkpoint, fileEditPaths);
+    } catch (error) {
+      logger.error(error instanceof Error ? error.message : 'filesTouched diff failed');
+    }
+  }
+  return [...new Set(fileEditPaths)];
+}
+
 async function createApiBinding(deps: ServerDeps, request: PromptRequest): Promise<ThreadRunBinding> {
   const project = projectForPath(deps.projects, request.cwd);
+  const mode = request.mode ?? 'agent';
   const thread = await deps.threads.createThread({
     projectId: project?.id ?? null,
     provider: request.provider,
     model: request.model ?? null,
-    mode: request.mode ?? 'agent',
+    mode,
     title: threadTitle(request.prompt),
     keep: request.ephemeral !== true,
     source: 'api',
@@ -308,6 +451,8 @@ async function createApiBinding(deps: ServerDeps, request: PromptRequest): Promi
     startedAt: run.startedAt,
     contextSummary: null,
     attachments: [],
+    mode,
+    checkpoint: null,
   };
 }
 
@@ -315,8 +460,12 @@ async function saveRun(
   deps: ServerDeps,
   binding: ThreadRunBinding,
   outcome: ExecutionOutcome,
+  filesTouched?: string[],
 ): Promise<Run> {
-  const run = runFromOutcome(binding, outcome);
+  const run = runFromOutcome(binding, outcome, {
+    checkpoint: binding.checkpoint,
+    ...(filesTouched !== undefined ? { filesTouched } : {}),
+  });
   try {
     return await deps.threads.updateRun(binding.threadId, run);
   } catch (error) {
@@ -354,11 +503,8 @@ export function sessionVisible(deps: ServerDeps, principal: Principal, cwd: stri
 }
 
 export function countActiveRuns(deps: ServerDeps, principal: Principal): number {
-  return deps.registry.list().filter((record) => {
-    if (record.status !== 'running' && record.status !== 'pending') return false;
-    if (principal.kind === 'machine') return true;
-    return sessionVisible(deps, principal, record.cwd);
-  }).length;
+  if (principal.kind === 'browser') return deps.scheduler.activeFor(principal.projectId);
+  return deps.scheduler.activeCount();
 }
 
 async function confineRequest(

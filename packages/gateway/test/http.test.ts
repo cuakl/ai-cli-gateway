@@ -142,7 +142,7 @@ describe('POST /api/v1/prompt', () => {
       if (!isRecord(response.body)) return;
       expect(response.body.exitCode).toBe(0);
       expect(response.body.summary).toBe('hello world');
-      expect(eventTypes(response.body.events)).toEqual(['init', 'chunk', 'chunk', 'done']);
+      expect(eventTypes(response.body.events)).toEqual(['init', 'chunk', 'chunk', 'files_changed', 'done']);
       const events = response.body.events;
       if (!Array.isArray(events) || !isRecord(events[1]) || !isRecord(events[2])) return;
       expect(isRecord(events[1].payload) && events[1].payload.text).toBe('hello ');
@@ -266,7 +266,7 @@ describe('sessions and SSE', () => {
       expect(raw).toContain('event: chunk\n');
       expect(raw).toContain('event: done\n');
       const events = parseAll(raw);
-      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'done']);
+      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'files_changed', 'done']);
       expect(events[1]?.payload.text).toBe('buffered');
 
       await waitFor(async () => {
@@ -310,7 +310,7 @@ describe('sessions and SSE', () => {
       expect(received.map((event) => event.payload.text)).toEqual(['started', 'early']);
       release();
       const events = await finished;
-      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'chunk', 'done']);
+      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'chunk', 'files_changed', 'done']);
       expect(events[2]?.payload.text).toBe('late');
     } finally {
       release();

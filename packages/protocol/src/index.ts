@@ -75,6 +75,8 @@ export type { Project } from './projects.js';
 export {
   ContextSummarySchema,
   ImageAttachmentSchema,
+  RestoreRunRequestSchema,
+  RestoreRunResponseSchema,
   RunCheckpointSchema,
   RunErrorSchema,
   RunIdSchema,
@@ -90,6 +92,8 @@ export {
 export type {
   ContextSummary,
   ImageAttachment,
+  RestoreRunRequest,
+  RestoreRunResponse,
   Run,
   RunCheckpoint,
   RunError,

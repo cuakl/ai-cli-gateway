@@ -43,7 +43,7 @@ describe('WebSocket /ws', () => {
       await messages.waitFor((items) => items.some((item) => item.type === 'event' && item.event.type === 'done'));
       expect(messages.items[0]).toMatchObject({ type: 'ready', sessionId: expect.stringMatching(/^sess_/) });
       const events = messages.items.flatMap((item) => (item.type === 'event' ? [item.event] : []));
-      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'done']);
+      expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'files_changed', 'done']);
       expect(events[1]?.payload.text).toBe('hello');
       for (const item of messages.items) {
         expect(GatewayServerMessageSchema.parse(item)).toEqual(item);

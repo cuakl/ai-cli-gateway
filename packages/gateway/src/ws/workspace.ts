@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { PathEscapeError, confineToRoot, isInsideRoot, logger } from '@aidev/adapters';
+import { PathEscapeError, confineToRoot, logger } from '@aidev/adapters';
 import {
   WorkspaceClientMessageSchema,
   WorkspaceServerMessageSchema,
@@ -19,8 +19,10 @@ import { HttpError } from '../errors.js';
 import { abortThreadRun, cancelSession, executionHttpError, startExecution } from '../execute.js';
 import { composePrompt } from '../prompt-context.js';
 import { deleteThreadFully } from '../threads/control.js';
+import { restoreRun } from '../threads/restore.js';
 import { providerSupportsResume } from '../threads/resume.js';
-import { runningRun, threadTitle, type ThreadRunBinding } from '../threads/run.js';
+import { isAgentMode, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from '../threads/run.js';
+import { RunCancelledError, type RunLease } from '../threads/scheduler.js';
 import { ThreadStoreError } from '../threads/store.js';
 import { loadPreviousConversation } from '../threads/transcript.js';
 import type { ServerDeps } from '../types.js';
@@ -31,7 +33,6 @@ import { runTests } from '../workspace/test-service.js';
 const WS_OPEN = 1;
 
 const NOT_IMPLEMENTED = new Set<WorkspaceClientMessage['type']>([
-  'git.checkpoint.restore',
   'git.branch.create',
   'git.pr.create',
   'commit.suggest',
@@ -39,8 +40,9 @@ const NOT_IMPLEMENTED = new Set<WorkspaceClientMessage['type']>([
 
 interface TrackedRun {
   runId: string;
-  sessionId: string;
+  sessionId?: string;
   projectId: string;
+  threadId: string;
 }
 
 interface LivePty {
@@ -50,30 +52,38 @@ interface LivePty {
 
 /**
  * Multiplexed project socket: agent runs, threads, git, PTY, and tests.
- * Checkpoints, branches, and commit suggestions reply `not_implemented`.
+ * Branches and commit suggestions reply `not_implemented`.
  */
 export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps): void {
-  const hubs = new Map<string, Set<WebSocket>>();
   const runs = new Map<string, TrackedRun>();
   const ptys = new Map<string, LivePty>();
   const tests = new Map<string, AbortController>();
+  const acceptLocks = new Map<string, Promise<void>>();
+
+  const withAcceptLock = (id: string, fn: () => Promise<void>): Promise<void> => {
+    const previous = acceptLocks.get(id) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    acceptLocks.set(
+      id,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  };
 
   const broadcast = (projectId: string, message: WorkspaceServerMessage): void => {
-    const sockets = hubs.get(projectId);
-    if (!sockets) return;
-    const payload = encode(message);
-    if (!payload) return;
-    for (const socket of sockets) write(socket, payload);
+    deps.hub.broadcast(projectId, message);
   };
 
   const activity = (projectId: string): void => {
-    const project = deps.projects.get(projectId);
-    if (!project) return;
-    const activeRuns = deps.registry.list().filter((record) => {
-      if (record.status !== 'running' && record.status !== 'pending') return false;
-      return isInsideRoot(project.root, record.cwd);
-    }).length;
-    broadcast(projectId, { type: 'project.activity', activeRuns });
+    if (!deps.projects.get(projectId)) return;
+    broadcast(projectId, {
+      type: 'project.activity',
+      activeRuns: deps.scheduler.activeFor(projectId),
+      queuedRuns: deps.scheduler.queuedCount(projectId),
+    });
   };
 
   app.get('/api/v1/projects/:projectId/ws', { websocket: true }, (socket: WebSocket, request) => {
@@ -97,12 +107,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
     }
     const project = lookedUp;
 
-    let peers = hubs.get(projectId);
-    if (!peers) {
-      peers = new Set();
-      hubs.set(projectId, peers);
-    }
-    peers.add(socket);
+    deps.hub.add(projectId, socket);
     activity(projectId);
 
     const reply = (message: WorkspaceServerMessage): void => {
@@ -111,8 +116,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
     };
 
     socket.on('close', () => {
-      peers?.delete(socket);
-      if (peers && peers.size === 0) hubs.delete(projectId);
+      deps.hub.remove(projectId, socket);
     });
     socket.on('error', () => {
       // `close` drops the socket from the hub.
@@ -265,6 +269,20 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
           broadcast(projectId, { type: 'git.changed', summary: await getDiff(project.root) });
           return;
         }
+        case 'git.checkpoint.restore': {
+          const found = await deps.threads.findRun(message.runId);
+          if (!found || found.thread.projectId !== projectId) {
+            throw new HttpError(404, 'not_found', `Run ${message.runId} was not found`);
+          }
+          const restored = await restoreRun(deps, message.runId, { force: message.force });
+          reply({
+            type: 'git.checkpoint.restore.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            runId: restored.runId,
+            files: restored.files,
+          });
+          return;
+        }
         case 'git.log': {
           const commits = await gitLog(project.root, message.limit);
           reply({
@@ -324,34 +342,76 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       }
 
       const thread = await openThread(deps, projectId, message);
-      const runRecord = runningRun({
-        threadId: thread.id,
-        prompt: message.prompt,
-        contextSummary: summarizeContext(message.context),
-        attachments: message.attachments,
+      let binding: ThreadRunBinding | undefined;
+      let leasePromise: Promise<RunLease> | undefined;
+      await withAcceptLock(projectId, async () => {
+        const queued = !deps.scheduler.canStart(projectId, message.mode);
+        const runRecord = runningRun({
+          threadId: thread.id,
+          prompt: message.prompt,
+          contextSummary: summarizeContext(message.context),
+          attachments: message.attachments,
+          status: queued ? 'queued' : 'running',
+        });
+        await deps.threads.updateRun(thread.id, runRecord);
+        binding = {
+          threadId: thread.id,
+          runId: runRecord.id,
+          prompt: message.prompt,
+          startedAt: runRecord.startedAt,
+          contextSummary: runRecord.contextSummary,
+          attachments: runRecord.attachments,
+          mode: message.mode,
+          checkpoint: null,
+        };
+        runs.set(binding.runId, { runId: binding.runId, projectId, threadId: thread.id });
+        reply({
+          type: 'run.accepted',
+          ...(message.requestId ? { requestId: message.requestId } : {}),
+          threadId: thread.id,
+          runId: binding.runId,
+        });
+        leasePromise = deps.scheduler.acquire(projectId, message.mode, binding.runId);
+        activity(projectId);
       });
-      await deps.threads.updateRun(thread.id, runRecord);
-      const binding: ThreadRunBinding = {
-        threadId: thread.id,
-        runId: runRecord.id,
-        prompt: message.prompt,
-        startedAt: runRecord.startedAt,
-        contextSummary: runRecord.contextSummary,
-        attachments: runRecord.attachments,
-      };
+      if (!binding || !leasePromise) throw new HttpError(500, 'internal', 'Run was not accepted');
+      const runId = binding.runId;
+
+      let lease: RunLease | undefined;
+      try {
+        lease = await leasePromise;
+      } catch (error) {
+        runs.delete(runId);
+        if (error instanceof RunCancelledError) {
+          const cancelled = runFromOutcome(binding, { status: 'killed', exitCode: 1, events: [] });
+          try {
+            await deps.threads.updateRun(binding.threadId, cancelled);
+          } catch (updateError) {
+            logger.error(updateError instanceof Error ? updateError.message : 'cancelled run was not saved');
+          }
+          reply({
+            type: 'run.finished',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            run: cancelled,
+          });
+          activity(projectId);
+          return;
+        }
+        throw error;
+      }
+
       const sessionId = `sess_${randomUUID()}`;
       const prelude = warning
         ? [createStreamEvent(sessionId, 'chunk', { text: warning, segment: -1 })]
         : undefined;
-      const resume = await resumeSessionId(deps, thread, message.provider);
-      let prompt = composePrompt(message.prompt, message.context);
-      if (!resume) {
-        const prior = await loadPreviousConversation(deps.threads, thread.id, runRecord.id);
-        if (prior) prompt = `${prior}\n\n${prompt}`;
-      }
-
       let started: Awaited<ReturnType<typeof startExecution>>;
       try {
+        const resume = await resumeSessionId(deps, thread, message.provider);
+        let prompt = composePrompt(message.prompt, message.context);
+        if (!resume) {
+          const prior = await loadPreviousConversation(deps.threads, thread.id, runId);
+          if (prior) prompt = `${prior}\n\n${prompt}`;
+        }
         started = await startExecution(
           deps,
           {
@@ -366,10 +426,14 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
           },
           sessionId,
           principal,
-          { binding, ...(prelude ? { prelude } : {}) },
+          { binding, heldLease: lease, ...(prelude ? { prelude } : {}) },
         );
+        lease = undefined;
       } catch (error) {
+        lease?.release();
+        runs.delete(runId);
         await abortThreadRun(deps, binding, error);
+        activity(projectId);
         const httpError = error instanceof HttpError ? error : executionHttpError(error);
         reply({
           type: 'error',
@@ -380,18 +444,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         return;
       }
 
-      const runId = binding.runId;
-      runs.set(runId, { runId, sessionId, projectId });
-      reply({
-        type: 'run.accepted',
-        ...(message.requestId ? { requestId: message.requestId } : {}),
-        threadId: thread.id,
-        runId,
-      });
+      runs.set(runId, { runId, sessionId, projectId, threadId: thread.id });
       activity(projectId);
 
       let live = false;
-      const queued: UnifiedStreamEvent[] = [];
+      const queuedEvents: UnifiedStreamEvent[] = [];
       const sendEvent = (event: UnifiedStreamEvent): void => {
         reply({
           type: 'run.event',
@@ -402,12 +459,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       };
       const subscription = deps.registry.subscribe(sessionId, (event) => {
         if (live) sendEvent(event);
-        else queued.push(event);
+        else queuedEvents.push(event);
       });
-      if (prelude) {
-        for (const event of prelude) sendEvent(event);
-      }
-      const buffered = (subscription?.events ?? []).concat(queued.splice(0, queued.length));
+      const buffered = (subscription?.events ?? []).concat(queuedEvents.splice(0, queuedEvents.length));
       live = true;
       for (const event of buffered) sendEvent(event);
 
@@ -420,7 +474,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         run: outcome.run,
       });
       runs.delete(runId);
-      if (outcome.events.some((event) => event.type === 'file_edit')) {
+      if (isAgentMode(message.mode)) {
         try {
           broadcast(projectId, { type: 'git.changed', summary: await getDiff(project.root) });
         } catch (error) {
@@ -435,7 +489,13 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       if (!tracked || tracked.projectId !== projectId) {
         throw new HttpError(404, 'not_found', `Run ${message.runId} was not found`);
       }
-      await cancelSession(deps.registry, tracked.sessionId);
+      if (tracked.sessionId) {
+        await cancelSession(deps.registry, tracked.sessionId);
+        return;
+      }
+      if (!deps.scheduler.cancel(tracked.runId)) {
+        throw new HttpError(404, 'not_found', `Run ${message.runId} was not found`);
+      }
     }
 
     async function spawnShell(message: Extract<WorkspaceClientMessage, { type: 'pty.spawn' }>): Promise<void> {

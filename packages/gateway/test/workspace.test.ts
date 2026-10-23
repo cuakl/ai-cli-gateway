@@ -51,7 +51,7 @@ describe('workspace WebSocket', () => {
       const finished = messages.items.find((item) => item.type === 'run.finished');
       expect(finished && finished.type === 'run.finished' && finished.run.status).toBe('succeeded');
       const events = messages.items.flatMap((item) => (item.type === 'run.event' ? [item.event] : []));
-      expect(events.map((event) => event.type)).toEqual(['chunk', 'done']);
+      expect(events.map((event) => event.type)).toEqual(['chunk', 'files_changed', 'done']);
       expect(events[0]?.payload.text).toBe('hello');
       await activity.waitFor((items) => {
         const counts = items.flatMap((item) => (item.type === 'project.activity' ? [item.activeRuns] : []));
@@ -126,7 +126,7 @@ describe('workspace WebSocket', () => {
     const messages = collect(socket);
     try {
       socket.send(JSON.stringify({ type: 'thread.list', requestId: 't1' }));
-      socket.send(JSON.stringify({ type: 'git.checkpoint.restore', requestId: 't2', runId: 'run_abc' }));
+      socket.send(JSON.stringify({ type: 'git.checkpoint.restore', requestId: 't2', runId: 'run_missingrunid1' }));
       socket.send(JSON.stringify({ type: 'nope', requestId: 'bad' }));
       await messages.waitFor((items) => items.filter((item) => item.requestId === 't1' || item.requestId === 't2' || item.requestId === 'bad').length >= 3);
       expect(messages.items.find((item) => item.requestId === 't1')).toMatchObject({
@@ -135,7 +135,7 @@ describe('workspace WebSocket', () => {
       });
       expect(messages.items.find((item) => item.requestId === 't2')).toMatchObject({
         type: 'error',
-        code: 'not_implemented',
+        code: 'not_found',
       });
       expect(messages.items.find((item) => item.requestId === 'bad')).toMatchObject({
         type: 'error',

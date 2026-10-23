@@ -99,6 +99,20 @@ export const ThreadSchema = z.object({
 
 export type Thread = z.infer<typeof ThreadSchema>;
 
+/** Body of `POST /api/v1/runs/:runId/restore`. */
+export const RestoreRunRequestSchema = z.object({
+  force: z.boolean().optional(),
+});
+
+export type RestoreRunRequest = z.infer<typeof RestoreRunRequestSchema>;
+
+export const RestoreRunResponseSchema = z.object({
+  runId: RunIdSchema,
+  files: z.array(z.string()),
+});
+
+export type RestoreRunResponse = z.infer<typeof RestoreRunResponseSchema>;
+
 export const RunSchema = z.object({
   id: RunIdSchema,
   threadId: ThreadIdSchema,
