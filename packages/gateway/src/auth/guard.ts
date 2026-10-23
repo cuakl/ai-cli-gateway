@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { ServerDeps } from '../types.js';
+import { isOpenAiPath } from '../errors.js';
 import {
   pathnameOf,
   readRequestToken,
@@ -27,9 +28,30 @@ export function registerAuthGuard(app: FastifyInstance, deps: ServerDeps): void 
     }
     if (!requiresAuth(pathname)) return;
     const principal = deps.auth.authenticate(readRequestToken(request));
-    if (!principal) return sendUnauthorized(reply);
+    if (!principal) {
+      if (isOpenAiPath(pathname)) {
+        return reply.code(401).send({
+          error: {
+            message: 'Invalid authentication. Provide Authorization: Bearer <token>.',
+            type: 'invalid_request_error',
+            code: 'invalid_api_key',
+          },
+        });
+      }
+      return sendUnauthorized(reply);
+    }
     if (isInferenceRoute(pathname)) {
-      if (principal.kind === 'browser') return sendForbidden(reply);
+      if (principal.kind === 'browser') {
+        if (isOpenAiPath(pathname)) {
+          return reply.code(403).send({
+            error: {
+              message: 'Browser tokens cannot call the OpenAI-compatible API.',
+              type: 'invalid_request_error',
+            },
+          });
+        }
+        return sendForbidden(reply);
+      }
     } else if (principal.kind === 'inference') {
       return sendForbidden(reply);
     }

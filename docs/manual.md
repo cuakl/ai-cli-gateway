@@ -154,9 +154,63 @@ curl -s http://127.0.0.1:4100/api/v1/infer \
 
 A successful body is `{ id, provider, model, text, durationMs, threadId }`. The run is stored as a thread with `source: "api"` and `keep: false` unless you pass `"keep": true`.
 
+### OpenAI-compatible endpoint
+
+`POST /v1/chat/completions` is a façade over the same infer pipeline. Use the official `openai` package with `baseURL: 'http://127.0.0.1:4100/v1'` and `apiKey` set to the machine token or an inference token. Threads are stored with `source: "openai"`.
+
+```ts
+import OpenAI from 'openai';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const openai = new OpenAI({
+  baseURL: 'http://127.0.0.1:4100/v1',
+  apiKey: process.env.AIDEV_TOKEN ?? readFileSync(join(homedir(), '.aidev/token'), 'utf8').trim(),
+});
+
+const completion = await openai.chat.completions.create({
+  model: 'cursor/gpt-5',
+  messages: [{ role: 'user', content: 'Reply with exactly: pong' }],
+});
+```
+
+`model` is `"<provider>/<model>"` (for example `cursor/gpt-5`, `claude/sonnet`), just `"<provider>"`, or omitted / `"default"` (gateway default). `GET /v1/models` lists those ids plus the plain provider ids (`cursor`, `claude`, …) from the capability matrix.
+
+`"stream": true` sends SSE `chat.completion.chunk` frames (`choices[0].delta.content`, first chunk includes `role: "assistant"`, last chunk has `finish_reason: "stop"`), then `data: [DONE]`. Non-stream replies are a `chat.completion` object. `usage` is `{ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }` — the CLI does not report token counts.
+
+`response_format: { type: 'json_schema', json_schema: { schema } }` and `{ type: 'json_object' }` use the structured pipeline. `tools` or `functions` return `400` `{ error: { message, type: 'invalid_request_error' } }`. Other errors use that OpenAI envelope as well.
+
+```bash
+curl -s http://127.0.0.1:4100/v1/models \
+  -H "authorization: Bearer $(cat ~/.aidev/token)"
+```
+
+See `examples/inference-openai`.
+
+### `@aidev/client`
+
+```ts
+import { createClient } from '@aidev/client';
+
+const ai = createClient(); // AIDEV_URL, AIDEV_TOKEN, or ~/.aidev/token
+await ai.generate({ prompt: 'Reply with exactly: pong', model: 'claude/sonnet' });
+for await (const chunk of ai.stream({ prompt: 'Say hello' })) process.stdout.write(chunk);
+const product = await ai.generateObject({
+  prompt: 'Invent a product',
+  schema: {
+    type: 'object',
+    properties: { name: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } },
+    required: ['name', 'tags'],
+  },
+});
+```
+
+`generateObject` accepts a JSON Schema object or a Zod schema. Zod is converted with `zod-to-json-schema` when that package is installed. Failures throw `AidevClientError` with a `code`. See `examples/inference-node`.
+
 ### Auth
 
-The route accepts the **machine token** (`~/.aidev/token`) or a token listed in `~/.aidev/config.json` under `inferenceTokens`. Put a dedicated token in another project's `.env` and send it as `Authorization: Bearer`. A browser token from project registration is rejected with `403`. No token is `401`.
+`/api/v1/infer` and `/v1/*` accept the **machine token** (`~/.aidev/token`) or a token listed in `~/.aidev/config.json` under `inferenceTokens`. Put a dedicated token in another project's `.env` and send it as `Authorization: Bearer`. A browser token from project registration is rejected with `403`. No token is `401`.
 
 `provider` defaults to `config.json` `defaultProvider`, then the first available verified CLI, preferring Cursor. `model` defaults to `defaultModel` when set.
 
@@ -169,6 +223,12 @@ Pass `jsonSchema` (a JSON Schema object). The gateway appends `Reply with only a
 ```
 
 On success the body includes `object` next to `text`.
+
+### Images
+
+`images` on `/api/v1/infer` is `[{ dataUrl } | { path }]`. OpenAI messages may use `content` parts: `{ type: 'text', text }` and `{ type: 'image_url', image_url: { url: 'data:image/png;base64,…' } }` (data URLs only). Allowed mime types are png, jpeg, webp, and gif; at most 5 images, 8 MB each.
+
+No provider has a verified native image flag, so the gateway writes files into the scratch workspace at `scratch/<runId>/attachments/n.<ext>` (ask-mode cwd, so the CLI can `Read` them) and appends `Attached images (read them before answering): <absolute paths>` to the prompt. When `"keep": true`, it also copies them to `$AIDEV_HOME/attachments/<runId>/`.
 
 ### Streaming
 
@@ -201,7 +261,7 @@ A successful body is `{ exitCode, summary, events }`. `events` is the unified st
 
 ### Session and Server-Sent Events
 
-Use a session when you want tokens as they arrive. This is what `examples/gateway-client/test-prompt.ts` does.
+Use a session when you want tokens as they arrive. For read-only completions prefer `@aidev/client` or `examples/inference-openai`.
 
 ```bash
 curl -s http://127.0.0.1:4100/api/v1/sessions \
@@ -353,7 +413,8 @@ Each adapter turns that CLI's JSON or NDJSON into the same event types. Text bec
 | `GATEWAY_ROOT` | `@aidev/gateway` | unset | When set, that directory is auto-registered as a project root at startup. |
 | `GATEWAY_URL` | Vite plugin, example client | `http://127.0.0.1:4100` | Gateway origin. The plugin injects this into the page. |
 | `GATEWAY_LOG_LEVEL` | `@aidev/adapters` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. Tests force `silent`. |
-| `GATEWAY_PROVIDER` | example client | first detected CLI, preferring `antigravity` | Provider for `pnpm --filter @aidev/gateway client`. |
+| `AIDEV_URL` | `@aidev/client` | `http://127.0.0.1:4100` | Gateway origin for `createClient()`. |
+| `AIDEV_MODEL` | examples | `cursor` | Model id for the inference examples. |
 | `GATEWAY_CWD` | example client | the current directory | Working directory sent with that prompt. It has to sit inside a registered project. |
 | `SHELL` | gateway PTY | the process shell, or `bash` | Shell spawned for the in-browser terminal. |
 
@@ -378,7 +439,7 @@ There is no API-key variable. Each CLI keeps its own login.
 
 - **Loopback.** The default bind is `127.0.0.1`. Set `HOST` only when you intend the port to be reachable from somewhere else.
 - **Machine token.** The first start writes `~/.aidev/token` (mode `0600`, 32 random bytes, base64url). Every `/api/v1/*` route and every WebSocket requires `Authorization: Bearer <token>` or `?token=`. `GET /health` stays open and returns only `{ status, version }`.
-- **Inference tokens.** `POST /api/v1/infer` also accepts a token listed in `config.json` `inferenceTokens`. Browser tokens are rejected on that route.
+- **Inference tokens.** `POST /api/v1/infer` and `/v1/*` also accept a token listed in `config.json` `inferenceTokens`. Browser tokens are rejected on those routes.
 - **Browser tokens.** `POST /api/v1/projects/register` (machine token) takes `{ root, origin }` and returns `{ projectId, browserToken }`. The browser token lives in memory, is scoped to that project, and is re-issued when the dev server registers again after a restart. Re-registering the same root keeps the project id and may add an origin.
 - **CORS.** `Access-Control-Allow-Origin` is set only for origins registered by a project (and the gateway's own origin after it binds). Any other `Origin`, including `https://evil.example`, gets no CORS header. Requests with no `Origin` (curl, Node) are allowed when the token is valid. A WebSocket upgrade with a non-allowlisted `Origin` is rejected.
 - **Project roots.** A machine token may use a `cwd` inside any registered project. A browser token may use only its own. Paths are realpath-checked, including symlinks. `GATEWAY_ROOT` only auto-registers that one root; it is not an implicit allow-all.

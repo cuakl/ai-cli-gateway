@@ -1,0 +1,12 @@
+{
+  "name": "@aidev/example-inference-node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types run.ts"
+  },
+  "dependencies": {
+    "@aidev/client": "workspace:*"
+  }
+}

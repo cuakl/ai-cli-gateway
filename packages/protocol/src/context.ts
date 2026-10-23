@@ -49,9 +49,9 @@ export type FailedNetworkRequest = z.infer<typeof FailedNetworkRequestSchema>;
 export const FrontendContextPayloadSchema = z.object({
   selectedElement: SelectedElementSchema.optional(),
   screenshotBase64: z.string().optional(),
-  recentErrors: z.array(FrontendErrorSchema),
-  recentConsoleLogs: z.array(FrontendConsoleLogSchema),
-  failedNetworkRequests: z.array(FailedNetworkRequestSchema),
+  recentErrors: z.array(FrontendErrorSchema).default([]),
+  recentConsoleLogs: z.array(FrontendConsoleLogSchema).default([]),
+  failedNetworkRequests: z.array(FailedNetworkRequestSchema).default([]),
 });
 
 export type FrontendContextPayload = z.infer<typeof FrontendContextPayloadSchema>;

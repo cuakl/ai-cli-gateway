@@ -6,7 +6,7 @@ import { CliAuthError, providerSetup, type CLIAdapter } from '@aidev/adapters';
 import { createStreamEvent, type PromptOptions, type ProviderCapabilities } from '@aidev/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defaultConfig, writeConfig } from '../src/home.js';
-import { isRecord, postJson, requestJson, startTestServer, waitFor, type TestServer } from './helpers.js';
+import { isRecord, postJson, requestJson, solidPng, startTestServer, waitFor, type TestServer } from './helpers.js';
 import { runtimeFor, ScriptedAdapter } from './scripted-adapter.js';
 
 const PRODUCT_SCHEMA = {
@@ -231,6 +231,34 @@ describe('POST /api/v1/infer', () => {
     expect(response.body.error).toBe('invalid_structured_output');
     expect(response.body.raw).toBe('{"name":1}');
     expect(response.body.issues).toBeDefined();
+  });
+
+  it('writes images into scratch/attachments and appends their paths to the prompt', async () => {
+    const seen: PromptOptions[] = [];
+    const png = solidPng(255, 0, 0);
+    const adapter = new ScriptedAdapter('cursor', async ({ options, onEvent, sessionId }) => {
+      seen.push(options);
+      const match = /Attached images \(read them before answering\): (\S+)/.exec(options.prompt);
+      const file = match?.[1];
+      expect(file).toBeTruthy();
+      expect(file && existsSync(file)).toBe(true);
+      expect(file?.startsWith(options.cwd)).toBe(true);
+      expect(existsSync(path.join(options.cwd, 'attachments'))).toBe(true);
+      onEvent(createStreamEvent(sessionId, 'chunk', { text: 'red' }));
+      onEvent(createStreamEvent(sessionId, 'done', {}));
+      return { exitCode: 0, summary: 'red' };
+    });
+    const server = await launch({ adapter });
+    const response = await postJson(`${server.url}/api/v1/infer`, {
+      messages: [{ role: 'user', content: 'What is the dominant color of the attached image? One word.' }],
+      images: [{ dataUrl: `data:image/png;base64,${png.toString('base64')}` }],
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ text: 'red' });
+    expect(seen).toHaveLength(1);
+    expect(isRecord(response.body) && existsSync(path.join(server.home, 'scratch', String(response.body.id)))).toBe(
+      false,
+    );
   });
 
   it('passes jsonSchema to the adapter when capabilities.supportsJsonSchema is true', async () => {

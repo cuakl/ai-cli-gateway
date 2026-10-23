@@ -2,7 +2,7 @@
 
 Inspect an element in the browser, describe the change, and let a CLI you are already logged into edit the project. The reply streams into a drawer. Vite hot-reloads the page. You review the diff and commit from the same toolbar.
 
-No LLM API key. The gateway shells out to Cursor (`agent`), Antigravity (`agy`), Claude Code (`claude`), or Codex (`codex`).
+No LLM API key. The gateway shells out to Cursor (`agent`), Antigravity (`agy`), Claude Code (`claude`), or Codex (`codex`). The same process also exposes a local inference API (`POST /api/v1/infer`, OpenAI-compatible `POST /v1/chat/completions`) so other projects can reuse that sign-in.
 
 ![Lumen storefront with the AI DevTools toolbar](docs/images/lumen-storefront.png)
 
@@ -50,10 +50,37 @@ The first start creates `~/.aidev/token`. `AIDEV_HOME` overrides that directory.
 
 The full walkthrough, with the chat, diff, terminal, and test panels, is in the [manual](docs/manual.md).
 
-You can also stream one prompt from the terminal while the gateway is running:
+## Use it as a local LLM API
+
+With the gateway running, any project can call the signed-in CLI in read-only ask mode. Nothing in this repo is edited. Cold start is several seconds.
+
+```ts
+import { createClient } from '@aidev/client';
+
+const ai = createClient();
+const { text } = await ai.generate({ prompt: 'Reply with exactly: pong' });
+```
+
+Or the official OpenAI SDK (`usage` is zeros; the CLI does not report tokens):
+
+```ts
+import OpenAI from 'openai';
+
+const openai = new OpenAI({
+  baseURL: 'http://127.0.0.1:4100/v1',
+  apiKey: process.env.AIDEV_TOKEN, // or ~/.aidev/token
+});
+const completion = await openai.chat.completions.create({
+  model: 'cursor',
+  messages: [{ role: 'user', content: 'Reply with exactly: pong' }],
+});
+```
+
+`model` is `"<provider>/<model>"` (for example `cursor/gpt-5`), `"<provider>"`, or omitted. Details, images, and structured output are in the [manual](docs/manual.md#use-it-as-an-llm-api).
 
 ```bash
-pnpm --filter @aidev/gateway client -- "Add a hover transition to the hero button"
+pnpm --filter @aidev/example-inference-node start
+pnpm --filter @aidev/example-inference-openai start
 ```
 
 ## Add it to a Vite app
@@ -79,11 +106,13 @@ ai-cli-gateway/
 │   ├── adapters/           # @aidev/adapters
 │   ├── gateway/            # @aidev/gateway
 │   ├── overlay/            # @aidev/overlay
-│   └── vite/               # @aidev/vite
+│   ├── vite/               # @aidev/vite
+│   └── client/             # @aidev/client
 ├── apps/
 │   └── demo-react-app/     # Lumen, the storefront used to exercise the overlay
 └── examples/
-    └── gateway-client/     # Streams one prompt against a running gateway
+    ├── inference-node/     # @aidev/client generate / stream / generateObject
+    └── inference-openai/   # official openai package against /v1
 ```
 
 | Package | What it does |
@@ -93,6 +122,7 @@ ai-cli-gateway/
 | `@aidev/gateway` | HTTP, Server-Sent Events, and WebSocket on `127.0.0.1:4100`. |
 | `@aidev/overlay` | Shadow-DOM toolbar: inspect, chat, diffs, terminal, tests. |
 | `@aidev/vite` | Injects the overlay, stamps `data-loc` on JSX, registers the project, and auto-starts the gateway. |
+| `@aidev/client` | Fetch SDK for inference: `generate`, `stream`, `generateObject`. |
 
 ## Checks
 

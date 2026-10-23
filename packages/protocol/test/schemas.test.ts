@@ -4,8 +4,10 @@ import {
   AidevConfigSchema,
   ContextSummarySchema,
   GatewayClientMessageSchema,
+  FrontendContextPayloadSchema,
   InferRequestSchema,
   InferResponseSchema,
+  OpenAIChatCompletionRequestSchema,
   ProjectRegisterRequestSchema,
   ProjectRegisterResponseSchema,
   ProjectSchema,
@@ -361,9 +363,33 @@ const samples: Sample[] = [
         { role: 'user', content: 'Name a color' },
       ],
       jsonSchema: { type: 'object', properties: { name: { type: 'string' } } },
+      images: [{ dataUrl: 'data:image/png;base64,aaa' }, { path: '/tmp/n.png' }],
       stream: false,
       timeoutMs: 30_000,
       keep: false,
+    },
+    invalid: { messages: [] },
+  },
+  {
+    name: 'openai chat completion request',
+    schema: OpenAIChatCompletionRequestSchema,
+    valid: {
+      model: 'cursor/gpt-5',
+      messages: [
+        { role: 'system', content: 'Be brief' },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What color?' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,aaa' } },
+          ],
+        },
+      ],
+      stream: false,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'product', schema: { type: 'object' } },
+      },
     },
     invalid: { messages: [] },
   },
@@ -872,5 +898,40 @@ describe('protocol schemas', () => {
         runId: 'run_abc',
       }).success,
     ).toBe(false);
+  });
+
+  it('defaults context arrays so non-overlay clients can omit them', () => {
+    expect(FrontendContextPayloadSchema.parse({})).toEqual({
+      recentErrors: [],
+      recentConsoleLogs: [],
+      failedNetworkRequests: [],
+    });
+    expect(
+      FrontendContextPayloadSchema.parse({
+        selectedElement: {
+          tagName: 'button',
+          id: 'hero-btn',
+          className: 'btn',
+          outerHTML: '<button></button>',
+          computedStyles: {},
+        },
+      }),
+    ).toMatchObject({
+      recentErrors: [],
+      recentConsoleLogs: [],
+      failedNetworkRequests: [],
+    });
+    const started = WorkspaceClientMessageSchema.parse({
+      type: 'run.start',
+      provider: 'cursor',
+      mode: 'ask',
+      prompt: 'Where is this styled?',
+    });
+    expect(started).toMatchObject({
+      type: 'run.start',
+      context: { recentErrors: [], recentConsoleLogs: [], failedNetworkRequests: [] },
+      attachments: [],
+    });
+    expect(InferRequestSchema.parse({ messages: [{ role: 'user', content: 'Hi' }] }).images).toBeUndefined();
   });
 });

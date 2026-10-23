@@ -5,7 +5,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { registerAuthGuard } from './auth/guard.js';
 import { AuthService } from './auth/principal.js';
 import { resolveConfig } from './config.js';
-import { HttpError, sendHttpError } from './errors.js';
+import { HttpError, isOpenAiPath, sendHttpError, sendOpenAiError } from './errors.js';
+import { registerOpenAiRoutes } from './routes/openai.js';
 import { ensureHome, readConfig, resolveAidevHome } from './home.js';
 import { ProjectRegistry } from './projects/registry.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
@@ -80,7 +81,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 
   const app = Fastify({
     logger: options.logger ?? false,
-    bodyLimit: 8 * 1024 * 1024,
+    bodyLimit: 64 * 1024 * 1024,
     forceCloseConnections: true,
   });
 
@@ -95,22 +96,44 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     deps.projects.trustOrigin(`http://localhost:${address.port}`);
   });
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
+    const openai = isOpenAiPath(request.url);
     if (error instanceof HttpError && error.code === 'unauthorized') {
+      if (openai) return sendOpenAiError(reply, error);
       return reply.code(401).send({ error: 'unauthorized' });
     }
-    if (error instanceof HttpError) return sendHttpError(reply, error);
+    if (error instanceof HttpError) {
+      return openai ? sendOpenAiError(reply, error) : sendHttpError(reply, error);
+    }
     const coded = error as { statusCode?: number; code?: string; message?: string };
     if (coded.statusCode === 400 && coded.code === 'FST_ERR_CTP_INVALID_JSON_BODY') {
+      if (openai) {
+        return reply.code(400).send({
+          error: { message: 'Request body must be valid JSON', type: 'invalid_request_error' },
+        });
+      }
       return reply.code(400).send({ error: 'invalid_json', message: 'Request body must be valid JSON' });
     }
     if (typeof coded.statusCode === 'number' && coded.statusCode >= 400 && coded.statusCode < 500) {
+      if (openai) {
+        return reply.code(coded.statusCode).send({
+          error: { message: coded.message ?? 'Bad request', type: 'invalid_request_error' },
+        });
+      }
       return reply.code(coded.statusCode).send({
         error: 'bad_request',
         message: coded.message ?? 'Bad request',
       });
     }
     logger.error(error instanceof Error ? error.message : 'request failed');
+    if (openai) {
+      return reply.code(500).send({
+        error: {
+          message: error instanceof Error ? error.message : 'Internal server error',
+          type: 'api_error',
+        },
+      });
+    }
     return reply.code(500).send({
       error: 'internal_error',
       message: error instanceof Error ? error.message : 'Internal server error',
@@ -139,6 +162,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerProjectRoutes(app, deps);
   registerPromptRoutes(app, deps);
   registerInferRoutes(app, deps);
+  registerOpenAiRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerThreadRoutes(app, deps);
   registerWebSocketRoutes(app, deps);

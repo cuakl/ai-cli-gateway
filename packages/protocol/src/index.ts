@@ -44,6 +44,7 @@ export type { GatewayClientMessage, GatewayServerMessage } from './messages.js';
 export {
   InferDeltaSchema,
   InferDoneSchema,
+  InferImageSchema,
   InferMessageRoleSchema,
   InferMessageSchema,
   InferRequestSchema,
@@ -52,11 +53,27 @@ export {
 export type {
   InferDelta,
   InferDone,
+  InferImage,
   InferMessage,
   InferMessageRole,
   InferRequest,
   InferResponse,
 } from './inference.js';
+
+export {
+  OpenAIChatCompletionRequestSchema,
+  OpenAIChatMessageSchema,
+  OpenAIContentPartSchema,
+  OpenAIModelListSchema,
+  OpenAIModelSchema,
+} from './openai.js';
+export type {
+  OpenAIChatCompletionRequest,
+  OpenAIChatMessage,
+  OpenAIContentPart,
+  OpenAIModel,
+  OpenAIModelList,
+} from './openai.js';
 
 export {
   DEFAULT_PROCESS_TIMEOUT_MS,

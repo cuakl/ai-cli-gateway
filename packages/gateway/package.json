@@ -24,7 +24,7 @@
     "test": "vitest run",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "client": "tsx ../../examples/gateway-client/test-prompt.ts"
+    "client": "pnpm --filter @aidev/example-inference-node start"
   },
   "dependencies": {
     "@aidev/adapters": "workspace:*",

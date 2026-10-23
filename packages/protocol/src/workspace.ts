@@ -67,8 +67,12 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
     model: z.string().min(1).optional(),
     mode: RunModeSchema,
     prompt: z.string().min(1),
-    context: FrontendContextPayloadSchema,
-    attachments: z.array(ImageAttachmentSchema),
+    context: FrontendContextPayloadSchema.optional().default({
+      recentErrors: [],
+      recentConsoleLogs: [],
+      failedNetworkRequests: [],
+    }),
+    attachments: z.array(ImageAttachmentSchema).optional().default([]),
   }),
   withType('run.cancel', {
     runId: RunIdSchema,

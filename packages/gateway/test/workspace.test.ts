@@ -145,6 +145,35 @@ describe('workspace WebSocket', () => {
       await closeSocket(socket);
     }
   });
+
+  it('accepts run.start without context or attachments', async () => {
+    const adapter = new ScriptedAdapter('cursor', async (ctx) => {
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'chunk', { text: 'ok' }));
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'done', { durationMs: 1 }));
+      return { exitCode: 0, summary: 'ok' };
+    });
+    const root = await tempDir('ws-nocontext-');
+    const server = await startProject(root, adapter);
+    const project = await register(server, root);
+    const socket = await openSocket(projectWs(server, project.id, project.token));
+    const messages = collect(socket);
+    try {
+      socket.send(
+        JSON.stringify({
+          type: 'run.start',
+          requestId: 'bare',
+          provider: 'cursor',
+          mode: 'ask',
+          prompt: 'Where is this styled?',
+        }),
+      );
+      await messages.waitFor((items) => items.some((item) => item.type === 'run.finished'));
+      expect(messages.items.find((item) => item.requestId === 'bare' && item.type === 'run.accepted')).toBeTruthy();
+      expect(messages.items.some((item) => item.type === 'error')).toBe(false);
+    } finally {
+      await closeSocket(socket);
+    }
+  });
 });
 
 function runStart(prompt: string): Record<string, unknown> {

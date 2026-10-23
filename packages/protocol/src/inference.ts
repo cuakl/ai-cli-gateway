@@ -12,6 +12,14 @@ export const InferMessageSchema = z.object({
 
 export type InferMessage = z.infer<typeof InferMessageSchema>;
 
+/** Image input for `/api/v1/infer`. Data URLs or local paths; written to the scratch workspace. */
+export const InferImageSchema = z.union([
+  z.object({ dataUrl: z.string().min(1) }).strict(),
+  z.object({ path: z.string().min(1) }).strict(),
+]);
+
+export type InferImage = z.infer<typeof InferImageSchema>;
+
 /**
  * Body of `POST /api/v1/infer`.
  * Runs in ask mode in a scratch directory. `provider` defaults to config, then
@@ -24,6 +32,7 @@ export const InferRequestSchema = z
     system: z.string().optional(),
     messages: z.array(InferMessageSchema).min(1),
     jsonSchema: z.record(z.string(), z.unknown()).optional(),
+    images: z.array(InferImageSchema).max(5).optional(),
     stream: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
     keep: z.boolean().optional(),
