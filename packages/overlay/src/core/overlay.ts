@@ -4,6 +4,7 @@ import { installContextCollectors } from '../context/index.js';
 import { OVERLAY_CSS } from '../styles.js';
 import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig, type OverlayTheme } from '../types.js';
 import { App } from '../ui/App.js';
+import { parseDockMode } from '../ui/layout/geometry.js';
 import {
   AID_FONT,
   AID_Z_HOST,
@@ -18,6 +19,7 @@ interface InjectedDevtoolsConfig {
   projectId?: string;
   browserToken?: string;
   theme?: OverlayTheme;
+  dock?: 'push' | 'overlay';
 }
 
 export class AiDevtoolsElement extends HTMLElement {
@@ -68,6 +70,7 @@ export class AiDevtoolsElement extends HTMLElement {
         nonempty(injected.browserToken),
       projectName: nonempty(this.config.projectName) ?? nonempty(injected.projectName),
       theme: this.resolvedTheme(injected),
+      dock: parseDockMode(this.config.dock) ?? parseDockMode(injected.dock) ?? 'push',
       workspace: this.config.workspace,
     };
   }

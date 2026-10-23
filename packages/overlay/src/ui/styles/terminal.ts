@@ -6,5 +6,12 @@ export const TERMINAL_CSS = `
   overflow: hidden;
   background: var(--aid-bg);
   font-family: var(--aid-mono);
+  letter-spacing: 0;
+}
+
+.terminal-host,
+.terminal-host * {
+  font-family: var(--aid-mono);
+  letter-spacing: 0;
 }
 `;

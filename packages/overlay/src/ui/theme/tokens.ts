@@ -110,6 +110,8 @@ export const THEME_CSS = `
   --aid-radius-md: 10px;
   --aid-radius-lg: 14px;
   --aid-radius-full: 999px;
+  --aid-pill-height: 40px;
+  --aid-sheet-height: 90vh;
   --aid-ease: cubic-bezier(.2, .8, .2, 1);
   --aid-dur: 160ms;
   --aid-dur-spin: 800ms;

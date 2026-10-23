@@ -29,27 +29,6 @@ export const CHAT_CSS = `
   gap: var(--aid-space-2);
 }
 
-.empty-state {
-  margin: auto 0;
-  padding: var(--aid-space-2) var(--aid-space-1) var(--aid-space-4);
-}
-
-.empty-title {
-  margin: 0 0 6px;
-  color: var(--aid-text);
-  font-size: var(--aid-text-lg);
-  font-weight: 620;
-  letter-spacing: -0.03em;
-}
-
-.empty-copy {
-  margin: 0;
-  max-width: 36em;
-  color: var(--aid-text-muted);
-  font-size: var(--aid-text-md);
-  line-height: var(--aid-line);
-}
-
 .message {
   max-width: 100%;
   padding: 10px var(--aid-space-3);
@@ -92,8 +71,8 @@ export const CHAT_CSS = `
 .suggestions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding-bottom: 10px;
+  gap: var(--aid-space-2);
+  padding-bottom: var(--aid-space-3);
 }
 
 .suggestions button {

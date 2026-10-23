@@ -1,6 +1,7 @@
 import type { ProviderType, SelectedElement } from '@aidev/protocol';
 import { selectionChipLabel } from '../inspector/locator.js';
-import { XIcon } from './icons.js';
+import { EmptyState } from './EmptyState.js';
+import { MessageSquareIcon, XIcon } from './icons.js';
 
 export interface ChatLine {
   id: string;
@@ -24,7 +25,6 @@ export interface ChatDrawerProps {
   onSuggest: (text: string) => void;
   onSubmit: () => void;
   onStop: () => void;
-  onClose: () => void;
 }
 
 const PROVIDERS: Array<{ id: ProviderType; label: string }> = [
@@ -50,34 +50,15 @@ export function ChatDrawer({
   onSuggest,
   onSubmit,
   onStop,
-  onClose,
 }: ChatDrawerProps) {
   const providerLabel = PROVIDERS.find((item) => item.id === provider)?.label ?? provider;
   const known = Object.prototype.hasOwnProperty.call(availability, provider);
   const unavailable = known && availability[provider] === false;
   const unavailableReason = `${providerLabel} is not on PATH. Install it, sign in, and restart the gateway.`;
-  const gatewayLabel = gatewayStatus === 'connected' ? 'Gateway connected' : 'Gateway offline';
   const conversation = messages.some((message) => message.role !== 'status');
 
   return (
-    <section className="drawer" aria-label="Chat">
-      <header className="drawer-header">
-        <div className="header-copy">
-          <p className="kicker">{providerLabel}</p>
-          <h2>Chat</h2>
-        </div>
-        <span className="muted">{gatewayLabel}</span>
-        <button
-          type="button"
-          className="icon-button"
-          data-action="close-chat"
-          aria-label="Close chat"
-          title="Close chat"
-          onClick={onClose}
-        >
-          <XIcon />
-        </button>
-      </header>
+    <section className="panel" aria-label="Chat">
       {selected ? (
         <div className="chip-row">
           <div className="chip">
@@ -96,30 +77,28 @@ export function ChatDrawer({
         </div>
       ) : null}
       <div className="messages" aria-live="polite">
-        {conversation
-          ? messages.map((message) =>
-              message.role === 'status' ? (
-                <div key={message.id} className="activity">
-                  {message.text}
-                </div>
-              ) : (
-                <div
-                  key={message.id}
-                  className={`message ${message.role}${message.pending ? ' pending' : ''}${message.error ? ' error' : ''}`}
-                >
-                  {message.text || (message.pending ? 'Waiting for the gateway…' : '')}
-                </div>
-              ),
-            )
-          : (
-            <div className="empty-state">
-              <p className="empty-title">Edit this page with {providerLabel}</p>
-              <p className="empty-copy">
-                Inspect an element, describe the change, and send. The agent edits the project and Vite reloads the
-                page. Review the diff before you commit.
-              </p>
-            </div>
-          )}
+        {conversation ? (
+          messages.map((message) =>
+            message.role === 'status' ? (
+              <div key={message.id} className="activity">
+                {message.text}
+              </div>
+            ) : (
+              <div
+                key={message.id}
+                className={`message ${message.role}${message.pending ? ' pending' : ''}${message.error ? ' error' : ''}`}
+              >
+                {message.text || (message.pending ? 'Waiting for the gateway…' : '')}
+              </div>
+            ),
+          )
+        ) : (
+          <EmptyState
+            icon={<MessageSquareIcon size={24} />}
+            title={`Edit this page with ${providerLabel}`}
+            hint="Inspect an element, describe the change, and send. The agent edits the project and Vite reloads the page."
+          />
+        )}
       </div>
       <div className="suggestions">
         {SUGGESTIONS.map((suggestion) => (
@@ -162,6 +141,7 @@ export function ChatDrawer({
             {unavailableReason}
           </p>
         ) : null}
+        {gatewayStatus === 'idle' ? <p className="hint">Gateway offline</p> : null}
         <textarea
           value={prompt}
           placeholder="Change the hero button to a deep violet with fully rounded corners"

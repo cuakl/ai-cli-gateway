@@ -15,10 +15,11 @@ export const TESTS_CSS = `
 
 .test-toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--aid-space-2);
-  padding: var(--aid-space-3) 14px;
-  border-top: 1px solid var(--aid-border);
+  padding: var(--aid-space-3) var(--aid-space-4);
+  border-bottom: 1px solid var(--aid-border);
   background: var(--aid-bg);
 }
 

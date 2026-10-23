@@ -62,7 +62,6 @@ describe('DiffViewer', () => {
         summary,
         loading: false,
         error: null,
-        onClose: () => {},
       }),
       host,
     );

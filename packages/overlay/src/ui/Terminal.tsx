@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
-import { XIcon } from './icons.js';
 import { AID_MONO, DARK_PALETTE } from './theme/tokens.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TerminalPanelProps {
   workspace: WorkspaceConnection;
   hidden?: boolean;
-  onClose: () => void;
 }
 
-export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPanelProps) {
+export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,13 +50,15 @@ export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPa
         });
         const fit = new FitAddon();
         term.loadAddon(fit);
+        await waitForSize(host);
+        if (cancelled) return;
         term.open(host);
         const safeFit = (): void => {
           if (host.clientWidth === 0 || host.clientHeight === 0) return;
           try {
             fit.fit();
           } catch {
-            // The drawer may not have a size on the first frame.
+            // The dock may not have a size on the first frame.
           }
         };
         safeFit();
@@ -120,25 +120,30 @@ export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPa
   }, [workspace]);
 
   return (
-    <section className="drawer wide" aria-label="Terminal" hidden={hidden} aria-hidden={hidden}>
-      <header className="drawer-header">
-        <div className="header-copy">
-          <p className="kicker">Project shell</p>
-          <h2>Terminal</h2>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          data-action="close-terminal"
-          aria-label="Close terminal"
-          title="Close terminal"
-          onClick={onClose}
-        >
-          <XIcon />
-        </button>
-      </header>
+    <section className="panel" aria-label="Terminal" hidden={hidden} aria-hidden={hidden}>
       {error ? <p className="banner">{error}</p> : null}
-      <div ref={hostRef} className="terminal-host" />
+      <div ref={hostRef} className="terminal-host" tabIndex={0} />
     </section>
   );
+}
+
+function waitForSize(host: HTMLElement): Promise<void> {
+  if (host.clientWidth > 0 && host.clientHeight > 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      observer?.disconnect();
+      resolve();
+    };
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => {
+        if (host.clientWidth > 0 && host.clientHeight > 0) finish();
+      });
+      observer.observe(host);
+    }
+    setTimeout(finish, 50);
+  });
 }

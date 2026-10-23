@@ -3,13 +3,34 @@ import type { GitDiffSummary, ProviderType, SelectedElement, UnifiedStreamEvent 
 import { gatherContext } from '../context/index.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
-import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type DevtoolsPanel, type ProviderStatus } from '../types.js';
+import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
+import { BottomDock } from './BottomDock.js';
 import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
 import { DiffViewer } from './DiffViewer.js';
 import { XIcon } from './icons.js';
+import { LauncherPill, type PillStatus } from './LauncherPill.js';
+import {
+  BOTTOM_DEFAULT,
+  PILL_HEIGHT,
+  SIDE_CHAT_DEFAULT,
+  type BottomTab,
+  type DockMode,
+  type PillCorner,
+  type SideTab,
+  clampBottomHeight,
+  clampSideWidth,
+  defaultSideWidth,
+  isCompactViewport,
+  isSheetViewport,
+  pillOffset,
+  readViewport,
+  reviewDefaultWidth,
+  shouldPush,
+} from './layout/geometry.js';
+import { applyDocumentPush, restoreDocumentPush, snapshotDocumentPush, type PushSnapshot } from './layout/push.js';
+import { SideDock } from './SideDock.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
-import { Toolbar } from './Toolbar.js';
 import {
   WorkspaceClient,
   WorkspaceError,
@@ -40,8 +61,16 @@ const disconnectedWorkspace: WorkspaceConnection = {
 
 export function App({ config }: AppProps) {
   const [inspecting, setInspecting] = useState(false);
-  const [panel, setPanel] = useState<DevtoolsPanel | null>(null);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [sideTab, setSideTab] = useState<SideTab>('chat');
+  const [bottomOpen, setBottomOpen] = useState(false);
+  const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
   const [terminalMounted, setTerminalMounted] = useState(false);
+  const [sideWidth, setSideWidth] = useState(SIDE_CHAT_DEFAULT);
+  const [bottomHeight, setBottomHeight] = useState(BOTTOM_DEFAULT);
+  const [pillCorner, setPillCorner] = useState<PillCorner>('bottom-right');
+  const [viewport, setViewport] = useState(readViewport());
+  const [chatUnread, setChatUnread] = useState(false);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [provider, setProvider] = useState<ProviderType>('cursor');
@@ -57,9 +86,29 @@ export function App({ config }: AppProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const elementRef = useRef<Element | null>(null);
   const pickerRef = useRef<ElementPicker | null>(null);
-  const drawerRef = useRef<HTMLDivElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const stopRun = useRef<(() => void) | null>(null);
   const runCleanup = useRef<(() => void) | null>(null);
+  const pushSnapshot = useRef<PushSnapshot | null>(null);
+  const skipSideFocus = useRef(true);
+  const skipBottomFocus = useRef(true);
+  const sideOpenRef = useRef(sideOpen);
+  const sideTabRef = useRef(sideTab);
+  const inspectingRef = useRef(inspecting);
+  const bottomOpenRef = useRef(bottomOpen);
+  const bottomTabRef = useRef(bottomTab);
+  sideOpenRef.current = sideOpen;
+  sideTabRef.current = sideTab;
+  inspectingRef.current = inspecting;
+  bottomOpenRef.current = bottomOpen;
+  bottomTabRef.current = bottomTab;
+
+  const dockMode: DockMode = config.dock ?? 'push';
+  const sheet = isSheetViewport(viewport.width);
+  const compact = isCompactViewport(viewport.width);
+  const pushEnabled = shouldPush(dockMode, sheet);
+  const pillStatus: PillStatus = sending ? 'running' : status === 'connected' ? 'connected' : 'idle';
+  const offset = pillOffset(pillCorner, sideOpen, bottomOpen, sideWidth, bottomHeight, sheet);
 
   const workspace = useMemo<WorkspaceConnection>(() => {
     if (config.workspace) return config.workspace;
@@ -78,6 +127,7 @@ export function App({ config }: AppProps) {
       setSummary(result.summary);
       setDiffCount(result.summary.files.length);
       setDiffError(null);
+      if (result.summary.files.length === 0) setNotice(null);
       return result.summary.files.length;
     } catch (error) {
       const message = visibleDiffError(error);
@@ -95,16 +145,25 @@ export function App({ config }: AppProps) {
 
   useEffect(() => () => runCleanup.current?.(), []);
 
+  useEffect(() => {
+    const onResize = (): void => setViewport(readViewport());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   useLayoutEffect(() => {
     const picker = new ElementPicker({
       onSelect(element) {
         elementRef.current = element;
         setSelected(locateElement(element));
         setInspecting(false);
-        setPanel('chat');
+        setSideTab('chat');
+        setSideOpen(true);
+        setChatUnread(false);
       },
       onCancel() {
         setInspecting(false);
+        focusAction('inspect');
       },
     });
     pickerRef.current = picker;
@@ -122,9 +181,9 @@ export function App({ config }: AppProps) {
   }, [inspecting]);
 
   useLayoutEffect(() => {
-    const node = drawerRef.current?.querySelector('.messages');
+    const node = shellRef.current?.querySelector('.messages');
     if (node instanceof HTMLElement) node.scrollTop = node.scrollHeight;
-  }, [messages, panel]);
+  }, [messages, sideTab, sideOpen]);
 
   useLayoutEffect(() => {
     void refreshDiffs();
@@ -133,6 +192,7 @@ export function App({ config }: AppProps) {
       setDiffCount(message.summary.files.length);
       setDiffError(null);
       setDiffLoading(false);
+      if (message.summary.files.length === 0) setNotice(null);
     });
   }, [refreshDiffs, workspace]);
 
@@ -170,22 +230,126 @@ export function App({ config }: AppProps) {
     };
   }, [config.browserToken, config.gatewayUrl, workspace]);
 
+  useLayoutEffect(() => {
+    if (!pushSnapshot.current) pushSnapshot.current = snapshotDocumentPush();
+    applyDocumentPush(
+      document.documentElement,
+      pushSnapshot.current,
+      pushEnabled && sideOpen ? sideWidth : 0,
+      pushEnabled && bottomOpen ? bottomHeight : 0,
+      pushEnabled,
+    );
+  }, [pushEnabled, sideOpen, bottomOpen, sideWidth, bottomHeight]);
+
+  useEffect(() => {
+    return () => {
+      if (pushSnapshot.current) restoreDocumentPush(document.documentElement, pushSnapshot.current);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (skipSideFocus.current) {
+      skipSideFocus.current = false;
+      return;
+    }
+    if (!sideOpen) return;
+    const root = shellRef.current;
+    if (!root) return;
+    if (sideTab === 'chat') {
+      const textarea = root.querySelector('textarea');
+      if (textarea instanceof HTMLElement) textarea.focus();
+      return;
+    }
+    const file = root.querySelector('[data-file], [aria-label="Modified files"]');
+    if (file instanceof HTMLElement) file.focus();
+  }, [sideOpen, sideTab]);
+
+  useLayoutEffect(() => {
+    if (skipBottomFocus.current) {
+      skipBottomFocus.current = false;
+      return;
+    }
+    if (!bottomOpen) return;
+    const root = shellRef.current;
+    if (!root) return;
+    if (bottomTab === 'terminal') {
+      const host = root.querySelector('.terminal-host');
+      if (host instanceof HTMLElement) host.focus();
+      return;
+    }
+    const run = root.querySelector('[data-action="run-tests"]');
+    if (run instanceof HTMLElement) run.focus();
+  }, [bottomOpen, bottomTab]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      if (inspectingRef.current) return;
+      if (bottomOpenRef.current) {
+        event.preventDefault();
+        closeBottom(false);
+        return;
+      }
+      if (sideOpenRef.current) {
+        event.preventDefault();
+        closeSide();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  function focusAction(action: string): void {
+    const button = shellRef.current?.querySelector(`[data-action="${action}"]`);
+    if (button instanceof HTMLElement) button.focus();
+  }
+
+  function openSide(tab: SideTab, fromInspect = false): void {
+    if (sheet && bottomOpen) setBottomOpen(false);
+    if (sideOpen && sideTab === tab && !fromInspect) {
+      closeSide();
+      return;
+    }
+    if (!sideOpen) setSideWidth(defaultSideWidth(tab, viewport.width));
+    else if (tab === 'diffs') setSideWidth((current) => Math.max(current, reviewDefaultWidth(viewport.width)));
+    setSideTab(tab);
+    setSideOpen(true);
+    if (tab === 'chat') setChatUnread(false);
+    if (tab === 'diffs') setNotice(null);
+  }
+
+  function closeSide(): void {
+    const action = sideTabRef.current === 'chat' ? 'chat' : 'diffs';
+    setSideOpen(false);
+    queueMicrotask(() => focusAction(action));
+  }
+
+  function openBottom(tab: BottomTab, force = false): void {
+    if (sheet && sideOpen) setSideOpen(false);
+    if (tab === 'terminal') setTerminalMounted(true);
+    if (bottomOpen && bottomTab === tab && !force) {
+      setBottomOpen(false);
+      queueMicrotask(() => focusAction(tab));
+      return;
+    }
+    if (!bottomOpen) setBottomHeight(clampBottomHeight(BOTTOM_DEFAULT, viewport.height));
+    setBottomTab(tab);
+    setBottomOpen(true);
+  }
+
+  function closeBottom(disposeTerminal: boolean): void {
+    const action = bottomTabRef.current === 'terminal' ? 'terminal' : 'tests';
+    if (disposeTerminal) setTerminalMounted(false);
+    setBottomOpen(false);
+    queueMicrotask(() => focusAction(action));
+  }
+
   function pushStatus(text: string): void {
     setMessages((current) => {
       const last = current[current.length - 1];
       if (last?.role === 'status' && last.text === text) return current;
       return [...current, { id: createId(), role: 'status', text }];
     });
-  }
-
-  function selectPanel(next: DevtoolsPanel): void {
-    if (next === 'terminal') setTerminalMounted(true);
-    setPanel((current) => (current === next ? null : next));
-  }
-
-  function closeTerminal(): void {
-    setTerminalMounted(false);
-    setPanel((current) => (current === 'terminal' ? null : current));
   }
 
   async function submit(): Promise<void> {
@@ -199,7 +363,6 @@ export function App({ config }: AppProps) {
     let settled = false;
     let runId: string | undefined;
     const offs: Array<() => void> = [];
-
     const writeAssistant = (value: string, isError = false): void => {
       assistantText = value;
       setMessages((current) =>
@@ -224,6 +387,7 @@ export function App({ config }: AppProps) {
       if (stopped) writeAssistant(assistantText || 'Stopped.');
       else if (failure) writeAssistant(assistantText ? `${assistantText}\n${failure}` : failure, true);
       else writeAssistant(assistantText || 'The agent finished without text output.');
+      if (!(sideOpenRef.current && sideTabRef.current === 'chat')) setChatUnread(true);
       if (!stopped && !failure && sawEdit) {
         void refreshDiffs().then((count) => {
           if (count > 0) setNotice(REVIEW_NOTICE);
@@ -306,21 +470,21 @@ export function App({ config }: AppProps) {
   }
 
   return (
-    <div className="dock">
+    <div className="dock" ref={shellRef}>
       {inspecting ? (
         <div className="inspect-banner" role="status">
           Click an element to attach it. Press Esc to cancel.
         </div>
       ) : null}
       {notice ? (
-        <div className="notice" role="status">
+        <div className="notice" data-corner={pillCorner} role="status" style={toastStyle(pillCorner, offset)}>
           <span>{notice}</span>
           <button
             type="button"
             data-action="review-diffs"
             onClick={() => {
               setNotice(null);
-              setPanel('diffs');
+              openSide('diffs');
             }}
           >
             Review diffs
@@ -337,17 +501,38 @@ export function App({ config }: AppProps) {
           </button>
         </div>
       ) : null}
-      <Toolbar
+      <LauncherPill
         inspecting={inspecting}
-        panel={panel}
+        sideOpen={sideOpen}
+        sideTab={sideTab}
+        bottomOpen={bottomOpen}
+        bottomTab={bottomTab}
         diffCount={diffCount}
-        status={status}
+        chatUnread={chatUnread}
+        status={pillStatus}
+        compact={compact}
+        corner={pillCorner}
+        insetInline={offset.inline}
+        insetBlock={offset.block}
+        onMove={setPillCorner}
         onToggleInspect={() => setInspecting((value) => !value)}
-        onSelectPanel={selectPanel}
+        onSelectChat={() => openSide('chat')}
+        onSelectReview={() => openSide('diffs')}
+        onSelectTerminal={() => openBottom('terminal')}
+        onSelectTests={() => openBottom('tests')}
       />
-      {panel || terminalMounted ? (
-        <div ref={drawerRef}>
-          {panel === 'chat' ? (
+      {sideOpen ? (
+        <SideDock
+          open={sideOpen}
+          sheet={sheet}
+          width={sideWidth}
+          bottomOffset={bottomOpen && !sheet ? bottomHeight : 0}
+          tab={sideTab}
+          onTab={(next) => openSide(next, true)}
+          onResize={(width) => setSideWidth(clampSideWidth(width))}
+          onClose={closeSide}
+        >
+          {sideTab === 'chat' ? (
             <ChatDrawer
               selected={selected}
               provider={provider}
@@ -370,28 +555,46 @@ export function App({ config }: AppProps) {
                 void submit();
               }}
               onStop={() => stopRun.current?.()}
-              onClose={() => setPanel(null)}
             />
-          ) : null}
-          {panel === 'diffs' ? (
-            <DiffViewer
-              workspace={workspace}
-              summary={summary}
-              loading={diffLoading}
-              error={diffError}
-              onClose={() => setPanel(null)}
-            />
-          ) : null}
+          ) : (
+            <DiffViewer workspace={workspace} summary={summary} loading={diffLoading} error={diffError} />
+          )}
+        </SideDock>
+      ) : null}
+      {bottomOpen || terminalMounted ? (
+        <BottomDock
+          open={bottomOpen}
+          sheet={sheet}
+          height={bottomHeight}
+          sideOffset={sideOpen && !sheet ? sideWidth : 0}
+          viewportHeight={viewport.height}
+          tab={bottomTab}
+          onTab={(next) => openBottom(next, true)}
+          onResize={(height) => setBottomHeight(clampBottomHeight(height, viewport.height))}
+          onClose={() => closeBottom(bottomTab === 'terminal')}
+        >
           {terminalMounted ? (
-            <TerminalPanel workspace={workspace} hidden={panel !== 'terminal'} onClose={closeTerminal} />
+            <TerminalPanel workspace={workspace} hidden={!bottomOpen || bottomTab !== 'terminal'} />
           ) : null}
-          {panel === 'tests' ? (
-            <TestRunner workspace={workspace} projectName={config.projectName} onClose={() => setPanel(null)} />
+          {bottomOpen && bottomTab === 'tests' ? (
+            <TestRunner workspace={workspace} projectName={config.projectName} />
           ) : null}
-        </div>
+        </BottomDock>
       ) : null}
     </div>
   );
+}
+
+function toastStyle(
+  corner: PillCorner,
+  offset: { inline: number; block: number },
+): Record<string, string> {
+  const edge = `${offset.block + PILL_HEIGHT + 8}px`;
+  const inset = `${offset.inline}px`;
+  if (corner === 'bottom-right') return { right: inset, bottom: edge, left: 'auto', top: 'auto' };
+  if (corner === 'bottom-left') return { left: inset, bottom: edge, right: 'auto', top: 'auto' };
+  if (corner === 'top-right') return { right: inset, top: edge, left: 'auto', bottom: 'auto' };
+  return { left: inset, top: edge, right: 'auto', bottom: 'auto' };
 }
 
 async function fetchProviderAvailability(gatewayUrl: string, token: string): Promise<ProviderStatus[]> {

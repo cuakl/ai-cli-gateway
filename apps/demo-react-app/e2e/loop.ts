@@ -124,13 +124,13 @@ async function exercise(page: Page, url: string): Promise<void> {
     { timeout: 20_000 },
   );
 
-  await page.getByRole('button', { name: /^Diffs/ }).click();
+  await page.locator('[data-action="diffs"]').click();
   await page.locator('[data-file="src/components/Hero.tsx"]').waitFor();
   await page.locator('[data-file="src/styles.css"]').waitFor();
   await page.getByLabel('Commit message').fill('style(hero): purple rounded button');
   await page.locator('[data-action="commit"]').click();
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
-  await page.getByText('No uncommitted changes.').waitFor();
+  await page.getByText('No changes yet').waitFor();
   await exerciseTerminal(page);
 }
 
@@ -290,11 +290,11 @@ async function exerciseTerminal(page: Page): Promise<void> {
     if (!(el instanceof HTMLElement)) throw new Error('Terminal did not render');
     el.dataset.e2e = 'kept';
   });
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('button', { name: 'Tests', exact: true }).click();
   await page.getByRole('button', { name: 'Terminal', exact: true }).click();
   await page.evaluate(() => {
     const root = document.querySelector('ai-devtools')?.shadowRoot;
-    const section = root?.querySelector('[aria-label="Terminal"]');
+    const section = root?.querySelector('section[aria-label="Terminal"]');
     const el = root?.querySelector('.xterm');
     if (!(section instanceof HTMLElement) || section.hidden) throw new Error('Terminal is not visible');
     if (!(el instanceof HTMLElement) || el.dataset.e2e !== 'kept') throw new Error('Terminal was recreated');

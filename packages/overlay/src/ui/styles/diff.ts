@@ -7,10 +7,22 @@ export const DIFF_CSS = `
 }
 
 .file-list {
-  width: 230px;
+  width: calc(var(--aid-space-6) * 7);
   overflow: auto;
   border-right: 1px solid var(--aid-border);
   background: var(--aid-bg);
+}
+
+.sheet .diff-layout {
+  flex-direction: column;
+}
+
+.sheet .file-list {
+  width: auto;
+  max-height: calc(var(--aid-space-6) * 4);
+  flex: none;
+  border-right: 0;
+  border-bottom: 1px solid var(--aid-border);
 }
 
 .file-list button {

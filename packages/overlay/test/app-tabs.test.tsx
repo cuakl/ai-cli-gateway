@@ -67,10 +67,10 @@ describe('overlay tabs', () => {
     expect(shadow?.textContent).toContain('src/App.tsx');
 
     (shadow?.querySelector('[data-action="terminal"]') as HTMLButtonElement).click();
-    const terminal = shadow?.querySelector('[aria-label="Terminal"]') as HTMLElement;
+    const terminal = shadow?.querySelector('section[aria-label="Terminal"]') as HTMLElement;
     expect(terminal).toBeTruthy();
     expect(terminal.hidden).toBe(false);
-    expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeNull();
+    expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeTruthy();
     await vi.waitFor(() => expect(sentTypes(workspace, 'pty.spawn')).toBe(1));
 
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
@@ -90,14 +90,13 @@ describe('overlay tabs', () => {
     expect(sentTypes(workspace, 'pty.spawn')).toBe(1);
     expect(sentTypes(workspace, 'pty.dispose')).toBe(0);
     (shadow?.querySelector('[data-action="close-terminal"]') as HTMLButtonElement).click();
-    expect(shadow?.querySelector('[aria-label="Terminal"]')).toBeNull();
+    expect(shadow?.querySelector('section[aria-label="Terminal"]')).toBeNull();
     await vi.waitFor(() =>
       expect(workspace.sent.some((message) => message.type === 'pty.dispose' && message.sessionId === 'pty_test')).toBe(
         true,
       ),
     );
 
-    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('textarea')).toBeTruthy();
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('textarea')).toBeNull();

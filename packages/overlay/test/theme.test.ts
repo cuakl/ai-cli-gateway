@@ -25,7 +25,7 @@ describe('design tokens', () => {
     expect(OVERLAY_CSS).toContain('--aid-mono: ui-monospace');
     expect(OVERLAY_CSS).toMatch(/:host \*\s*\{\s*font-family:\s*var\(--aid-font\)/);
     expect(OVERLAY_CSS).toMatch(/button, textarea, select, input \{[\s\S]*?font-family: var\(--aid-font\)/);
-    expect(OVERLAY_CSS).toMatch(/\.toolbar button \{/);
+    expect(OVERLAY_CSS).toMatch(/\.pill button \{/);
     expect(OVERLAY_CSS).toMatch(/\.composer textarea \{[\s\S]*?font-family: var\(--aid-font\)/);
     expect(OVERLAY_CSS).toMatch(/\.diff-line code \{[\s\S]*?font-family: var\(--aid-mono\)/);
     expect(OVERLAY_CSS).not.toMatch(/font-size:\s*(?:1[01]|[0-9])px\b/);

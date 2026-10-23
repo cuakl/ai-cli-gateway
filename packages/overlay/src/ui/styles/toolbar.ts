@@ -1,35 +1,40 @@
 export const TOOLBAR_CSS = `
-.toolbar {
+.pill {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: var(--aid-z-dock);
+  z-index: var(--aid-z-popover);
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  justify-content: flex-end;
-  gap: 2px;
-  max-width: calc(100vw - 32px);
-  padding: 6px;
-  overflow-x: auto;
+  gap: var(--aid-space-1);
+  height: var(--aid-pill-height);
+  max-width: calc(100vw - var(--aid-space-6));
+  padding: var(--aid-space-1);
   pointer-events: auto;
   background: var(--aid-bg-raised);
   border: 1px solid var(--aid-border);
-  border-radius: var(--aid-radius-lg);
+  border-radius: var(--aid-radius-full);
   box-shadow: var(--aid-shadow-lg);
   backdrop-filter: blur(16px);
 }
 
+.pill-dragging { cursor: grabbing; }
+
+.pill-grip {
+  flex: none;
+  width: 22px;
+  height: 28px;
+  color: var(--aid-text-muted);
+  cursor: grab;
+}
+
+.pill-grip:hover { background: var(--aid-bg-hover); color: var(--aid-text); }
+
 .brand {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--aid-space-2);
-  margin-right: var(--aid-space-1);
-  padding: 0 10px 0 var(--aid-space-2);
-  color: var(--aid-text);
-  font-weight: 620;
-  letter-spacing: -0.02em;
-  white-space: nowrap;
+  padding: 0 var(--aid-space-1);
 }
 
 .brand-mark {
@@ -41,11 +46,16 @@ export const TOOLBAR_CSS = `
 }
 
 .status {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: var(--aid-space-2);
   height: var(--aid-space-2);
   border-radius: var(--aid-radius-full);
   background: var(--aid-text-muted);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--aid-text-muted) 18%, transparent);
+  color: var(--aid-warning);
 }
 
 .status[data-state="connected"] {
@@ -53,24 +63,41 @@ export const TOOLBAR_CSS = `
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--aid-success) 22%, transparent);
 }
 
-.toolbar button {
+.status[data-state="running"] {
+  width: var(--aid-space-3);
+  height: var(--aid-space-3);
+  background: transparent;
+  box-shadow: none;
+}
+
+.pill button {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--aid-space-1);
   min-height: 32px;
-  padding: 6px var(--aid-space-3);
+  padding: var(--aid-space-1) var(--aid-space-3);
   border-radius: var(--aid-radius-full);
   color: var(--aid-text-muted);
   white-space: nowrap;
 }
 
-.toolbar button:hover { background: var(--aid-bg-hover); color: var(--aid-text); }
+.pill button:hover { background: var(--aid-bg-hover); color: var(--aid-text); }
 
-.toolbar button[aria-pressed="true"] {
+.pill button[aria-pressed="true"] {
   background: var(--aid-accent-solid);
   color: var(--aid-accent-fg);
 }
 
+.pill-label { font-weight: 560; }
+
+.pill-compact button { padding: var(--aid-space-1); }
+.pill-compact .pill-label { display: none; }
+
 .count {
   display: inline-block;
-  margin-left: 6px;
+  margin-left: 2px;
   min-width: 1.2em;
   padding: 0 6px;
   border-radius: var(--aid-radius-full);
@@ -81,8 +108,19 @@ export const TOOLBAR_CSS = `
   text-align: center;
 }
 
-.toolbar button[aria-pressed="true"] .count {
+.pill button[aria-pressed="true"] .count {
   background: color-mix(in srgb, var(--aid-accent-fg) 18%, transparent);
   color: var(--aid-accent-fg);
+}
+
+.pill-unread {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: var(--aid-space-2);
+  height: var(--aid-space-2);
+  border-radius: var(--aid-radius-full);
+  background: var(--aid-accent);
+  box-shadow: 0 0 0 2px var(--aid-bg-raised);
 }
 `;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { GitDiffFile, GitDiffHunk, GitDiffSummary } from '@aidev/protocol';
-import { XIcon } from './icons.js';
+import { EmptyState } from './EmptyState.js';
+import { GitCompareIcon } from './icons.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface DiffViewerProps {
@@ -8,10 +9,9 @@ export interface DiffViewerProps {
   summary: GitDiffSummary | null;
   loading: boolean;
   error: string | null;
-  onClose: () => void;
 }
 
-export function DiffViewer({ workspace, summary, loading, error, onClose }: DiffViewerProps) {
+export function DiffViewer({ workspace, summary, loading, error }: DiffViewerProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [push, setPush] = useState(false);
@@ -76,28 +76,18 @@ export function DiffViewer({ workspace, summary, loading, error, onClose }: Diff
   }
 
   return (
-    <section className="drawer wide" aria-label="Diffs">
-      <header className="drawer-header">
-        <div className="header-copy">
-          <p className="kicker">{summary?.branch ?? 'Working tree'}</p>
-          <h2>Diffs</h2>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          data-action="close-diffs"
-          aria-label="Close diffs"
-          title="Close diffs"
-          onClick={onClose}
-        >
-          <XIcon />
-        </button>
-      </header>
+    <section className="panel" aria-label="Diffs">
       {error ? <p className="banner">{error}</p> : null}
       {actionError ? <p className="banner">{actionError}</p> : null}
       {status ? <p className="banner ok">{status}</p> : null}
       {loading && files.length === 0 ? <p className="empty">Loading diff…</p> : null}
-      {!loading && files.length === 0 ? <p className="empty">No uncommitted changes.</p> : null}
+      {!loading && files.length === 0 ? (
+        <EmptyState
+          icon={<GitCompareIcon size={24} />}
+          title="No changes yet"
+          hint="Edits from the agent will land here so you can review, commit, or discard them."
+        />
+      ) : null}
       {files.length > 0 ? (
         <div className="diff-layout">
           <div className="file-list" role="listbox" aria-label="Modified files">
@@ -123,64 +113,71 @@ export function DiffViewer({ workspace, summary, loading, error, onClose }: Diff
           <div className="diff-view">{selected ? <FileDiff file={selected} /> : null}</div>
         </div>
       ) : null}
-      <form
-        className="commit-bar"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void commit();
-        }}
-      >
-        <input
-          aria-label="Commit message"
-          placeholder="Commit message"
-          value={message}
-          disabled={busy}
-          onInput={(event) => setMessage(event.currentTarget.value)}
-        />
-        <label className="push-toggle">
+      {files.length > 0 ? (
+        <form
+          className="commit-bar"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void commit();
+          }}
+        >
           <input
-            type="checkbox"
-            checked={push}
+            aria-label="Commit message"
+            placeholder="Commit message"
+            value={message}
             disabled={busy}
-            onChange={(event) => setPush(event.currentTarget.checked)}
+            onInput={(event) => setMessage(event.currentTarget.value)}
           />
-          Push to origin
-        </label>
-        <div className="composer-actions">
-          {confirming ? (
-            <div className="confirm" role="alertdialog" aria-label="Discard changes">
-              <span>Discard uncommitted changes?</span>
-              <button type="button" className="ghost" data-action="cancel-discard" onClick={() => setConfirming(false)}>
-                Cancel
-              </button>
+          <label className="push-toggle">
+            <input
+              type="checkbox"
+              checked={push}
+              disabled={busy}
+              onChange={(event) => setPush(event.currentTarget.checked)}
+            />
+            Push to origin
+          </label>
+          <div className="composer-actions">
+            {confirming ? (
+              <div className="confirm" role="alertdialog" aria-label="Discard changes">
+                <span>Discard uncommitted changes?</span>
+                <button type="button" className="ghost" data-action="cancel-discard" onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="danger"
+                  data-action="confirm-discard"
+                  disabled={busy}
+                  onClick={() => {
+                    void discard();
+                  }}
+                >
+                  Discard changes
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
-                className="danger"
-                data-action="confirm-discard"
-                disabled={busy}
-                onClick={() => {
-                  void discard();
-                }}
+                className="ghost"
+                data-action="discard"
+                disabled={busy || files.length === 0}
+                onClick={() => setConfirming(true)}
               >
-                Discard changes
+                Discard
               </button>
-            </div>
-          ) : (
+            )}
             <button
-              type="button"
-              className="ghost"
-              data-action="discard"
-              disabled={busy || files.length === 0}
-              onClick={() => setConfirming(true)}
+              type="submit"
+              className="primary"
+              data-action="commit"
+              disabled={busy || message.trim().length === 0 || files.length === 0}
             >
-              Discard
+              Commit Changes
             </button>
-          )}
-          <button type="submit" className="primary" data-action="commit" disabled={busy || message.trim().length === 0 || files.length === 0}>
-            Commit Changes
-          </button>
-        </div>
-      </form>
+          </div>
+        </form>
+      ) : null}
     </section>
   );
 }
@@ -190,7 +187,9 @@ function FileDiff({ file }: { file: GitDiffFile }) {
     <div className="diff-file">
       <div className="diff-file-head">
         <span className="file-status">{file.status}</span>
-        <span className="file-sep" aria-hidden="true">·</span>
+        <span className="file-sep" aria-hidden="true">
+          ·
+        </span>
         <span className="file-path" title={file.path}>
           {file.path}
         </span>

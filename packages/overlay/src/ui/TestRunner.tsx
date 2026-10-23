@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { XIcon } from './icons.js';
+import { EmptyState } from './EmptyState.js';
+import { FlaskConicalIcon } from './icons.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TestRunnerProps {
   workspace: WorkspaceConnection;
   projectName?: string;
-  onClose: () => void;
 }
 
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed' | 'stopped';
@@ -18,7 +18,7 @@ const STATUS_LABEL: Record<TestStatus, string> = {
   stopped: 'Stopped',
 };
 
-export function TestRunner({ workspace, projectName, onClose }: TestRunnerProps) {
+export function TestRunner({ workspace, projectName }: TestRunnerProps) {
   const [status, setStatus] = useState<TestStatus>('idle');
   const [log, setLog] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -60,29 +60,16 @@ export function TestRunner({ workspace, projectName, onClose }: TestRunnerProps)
     }
   }
 
+  const idle = status === 'idle' && !log;
+
   return (
-    <section className="drawer wide" aria-label="Tests">
-      <header className="drawer-header">
-        <div className="header-copy">
-          <p className="kicker">{projectName?.trim() || 'Tests'}</p>
-          <h2>Tests</h2>
-        </div>
-        <span className="badge" data-status={status}>
-          {STATUS_LABEL[status]}
-        </span>
-        <button
-          type="button"
-          className="icon-button"
-          data-action="close-tests"
-          aria-label="Close tests"
-          title="Close tests"
-          onClick={onClose}
-        >
-          <XIcon />
-        </button>
-      </header>
+    <section className="panel" aria-label="Tests">
       <div className="test-toolbar">
+        <p className="kicker">{projectName?.trim() || 'Tests'}</p>
         <div className="test-actions">
+          <span className="badge" data-status={status}>
+            {STATUS_LABEL[status]}
+          </span>
           <button
             type="button"
             className="primary"
@@ -102,9 +89,17 @@ export function TestRunner({ workspace, projectName, onClose }: TestRunnerProps)
         </div>
       </div>
       {error ? <p className="banner">{error}</p> : null}
-      <pre className="test-log" aria-live="polite">
-        {log || 'Test output will appear here.'}
-      </pre>
+      {idle ? (
+        <EmptyState
+          icon={<FlaskConicalIcon size={24} />}
+          title="No results yet"
+          hint="Run the project test suite. Output streams here as it happens."
+        />
+      ) : (
+        <pre className="test-log" aria-live="polite">
+          {log || 'Test output will appear here.'}
+        </pre>
+      )}
     </section>
   );
 }
