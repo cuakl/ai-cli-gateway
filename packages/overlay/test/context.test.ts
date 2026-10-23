@@ -53,6 +53,18 @@ describe('gatherContext', () => {
     expect(payload.failedNetworkRequests).toEqual([]);
   });
 
+  it('drops errors older than two minutes', async () => {
+    console.error = (() => undefined) as typeof console.error;
+    installContextCollectors();
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now - 3 * 60 * 1000);
+    console.error('stale');
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const payload = await gatherContext(undefined, null, { screenshot: false, now, maxAgeMs: 2 * 60 * 1000 });
+    expect(payload.recentErrors).toEqual([]);
+    expect(payload.recentConsoleLogs).toEqual([]);
+  });
+
   it('omits the screenshot when capture fails', async () => {
     installContextCollectors();
     vi.mocked(toPng).mockRejectedValue(new Error('cors'));

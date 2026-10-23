@@ -1,7 +1,12 @@
 import type { FailedNetworkRequest } from '@aidev/protocol';
+import { notifyContext } from './bus.js';
 import { createRingBuffer, type RingBuffer } from './ring.js';
 
-const failures: RingBuffer<FailedNetworkRequest> = createRingBuffer();
+interface StoredFailure extends FailedNetworkRequest {
+  timestamp: number;
+}
+
+const failures: RingBuffer<StoredFailure> = createRingBuffer();
 let installed = false;
 let gatewayOrigin: string | null = null;
 let originalFetch: typeof window.fetch | null = null;
@@ -34,7 +39,14 @@ export function uninstallNetworkCapture(): void {
 }
 
 export function getFailedNetworkRequests(): FailedNetworkRequest[] {
-  return failures.snapshot();
+  return failures.snapshot().map(toRequest);
+}
+
+export function getRecentFailedNetworkRequests(maxAgeMs: number, now = Date.now()): FailedNetworkRequest[] {
+  return failures
+    .snapshot()
+    .filter((entry) => now - entry.timestamp <= maxAgeMs)
+    .map(toRequest);
 }
 
 function recordFailure(url: string, status: number, started: number): void {
@@ -43,7 +55,13 @@ function recordFailure(url: string, status: number, started: number): void {
     url,
     status,
     durationMs: Math.max(0, Math.round(performance.now() - started)),
+    timestamp: Date.now(),
   });
+  notifyContext();
+}
+
+function toRequest(entry: StoredFailure): FailedNetworkRequest {
+  return { url: entry.url, status: entry.status, durationMs: entry.durationMs };
 }
 
 function requestUrl(input: RequestInfo | URL): string {

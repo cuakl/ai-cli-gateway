@@ -1,4 +1,5 @@
 import type { FrontendError } from '@aidev/protocol';
+import { notifyContext } from './bus.js';
 import { createRingBuffer, type RingBuffer } from './ring.js';
 
 const errors: RingBuffer<FrontendError> = createRingBuffer();
@@ -7,6 +8,7 @@ let previousOnError: OnErrorEventHandler = null;
 
 export function recordError(error: FrontendError): void {
   errors.push(error);
+  notifyContext();
 }
 
 export function installErrorCapture(): void {

@@ -267,3 +267,22 @@ export function PencilIcon(props: IconProps): JSX.Element {
     </Icon>
   );
 }
+
+export function PlusIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </Icon>
+  );
+}
+
+export function HistoryIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
+    </Icon>
+  );
+}

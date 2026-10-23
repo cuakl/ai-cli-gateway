@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { DockHeader } from './DockHeader.js';
-import { SettingsIcon } from './icons.js';
+import { HistoryIcon, PlusIcon, SettingsIcon } from './icons.js';
 import {
   SIDE_MAX,
   SIDE_MIN,
@@ -18,6 +18,9 @@ export interface SideDockProps {
   onResize: (width: number) => void;
   onClose: () => void;
   onSettings: () => void;
+  onNewChat?: () => void;
+  historyOpen?: boolean;
+  onToggleHistory?: () => void;
   children: ComponentChildren;
 }
 
@@ -35,6 +38,9 @@ export function SideDock({
   onResize,
   onClose,
   onSettings,
+  onNewChat,
+  historyOpen = false,
+  onToggleHistory,
   children,
 }: SideDockProps) {
   const closeAction = tab === 'chat' ? 'close-chat' : 'close-diffs';
@@ -64,16 +70,43 @@ export function SideDock({
         onClose={onClose}
         sheet={sheet}
         extra={
-          <button
-            type="button"
-            className="icon-button"
-            data-action="settings"
-            aria-label="Settings"
-            title="Settings"
-            onClick={onSettings}
-          >
-            <SettingsIcon />
-          </button>
+          <>
+            {tab === 'chat' && onNewChat ? (
+              <button
+                type="button"
+                className="icon-button"
+                data-action="new-chat"
+                aria-label="New chat"
+                title="New chat"
+                onClick={onNewChat}
+              >
+                <PlusIcon />
+              </button>
+            ) : null}
+            {tab === 'chat' && onToggleHistory ? (
+              <button
+                type="button"
+                className="icon-button"
+                data-action="history"
+                aria-label="History"
+                title="History"
+                aria-pressed={historyOpen}
+                onClick={onToggleHistory}
+              >
+                <HistoryIcon />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="icon-button"
+              data-action="settings"
+              aria-label="Settings"
+              title="Settings"
+              onClick={onSettings}
+            >
+              <SettingsIcon />
+            </button>
+          </>
         }
       />
       <div className="dock-body">{children}</div>

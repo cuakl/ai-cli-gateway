@@ -109,12 +109,12 @@ export function locateElement(element: Element): SelectedElement {
   });
 }
 
-/** Chip text without the surrounding brackets: `HeroButton - Hero.tsx:42`. */
+/** Chip text without the surrounding brackets: `HeroButton · Hero.tsx:42`. */
 export function selectionChipLabel(selected: SelectedElement): string {
   const source = selected.sourceLocation;
   if (source) {
     const file = source.fileName.split(/[/\\]/).pop() ?? source.fileName;
-    return `${source.componentName} - ${file}:${source.lineNumber}`;
+    return `${source.componentName} · ${file}:${source.lineNumber}`;
   }
   const id = selected.id ? `#${selected.id}` : '';
   const className = selected.className.trim().split(/\s+/).filter(Boolean)[0];

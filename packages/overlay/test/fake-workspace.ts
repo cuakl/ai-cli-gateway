@@ -116,6 +116,30 @@ function defaultReply(message: WorkspaceClientMessage, summary: GitDiffSummary):
         threadId: 'thr_test',
         runId: 'run_test',
       };
+    case 'files.search':
+      return { type: 'files.search.result', requestId: message.requestId, files: [] };
+    case 'thread.list':
+      return { type: 'thread.list.result', requestId: message.requestId, threads: [] };
+    case 'thread.get':
+      return {
+        type: 'thread.get.result',
+        requestId: message.requestId,
+        thread: {
+          id: message.threadId,
+          projectId: 'proj_test',
+          provider: 'cursor',
+          model: null,
+          mode: 'agent',
+          providerSessionId: null,
+          title: 'Untitled',
+          createdAt: 1,
+          updatedAt: 1,
+          keep: true,
+          source: 'overlay',
+        },
+        runs: [],
+        events: [],
+      };
     case 'git.checkpoint.restore':
       return {
         type: 'git.checkpoint.restore.result',

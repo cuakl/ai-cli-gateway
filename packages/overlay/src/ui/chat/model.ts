@@ -1,4 +1,11 @@
-import type { RunStatus, StreamEventPayload, UnifiedStreamEvent } from '@aidev/protocol';
+import type {
+  ContextSummary,
+  Run,
+  RunStatus,
+  StreamEventPayload,
+  ThreadEvent,
+  UnifiedStreamEvent,
+} from '@aidev/protocol';
 
 export const RESULT_LIMIT = 2000;
 
@@ -14,6 +21,10 @@ export interface ContextChip {
   id: string;
   kind: ContextChipKind;
   label: string;
+  /** Tooltip / hover preview. */
+  preview?: string;
+  /** Data URL for a screenshot thumbnail. */
+  thumbnail?: string;
 }
 
 export interface NoticeAction {
@@ -433,4 +444,78 @@ function createId(): string {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
   return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+/** Rebuild a transcript from stored runs and their JSONL events. */
+export function hydrateFromThread(runs: readonly Run[], events: readonly ThreadEvent[]): ChatState {
+  const byRun = new Map<string, UnifiedStreamEvent[]>();
+  for (const entry of events) {
+    const list = byRun.get(entry.runId);
+    if (list) list.push(entry.event);
+    else byRun.set(entry.runId, [entry.event]);
+  }
+  const ordered = runs.slice().sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1));
+  let state = emptyChatState();
+  for (const run of ordered) {
+    state = startTurn(state, {
+      userText: run.prompt,
+      chips: chipsFromSummary(run.contextSummary),
+      runId: run.id,
+    });
+    let sawDone = false;
+    for (const event of byRun.get(run.id) ?? []) {
+      if (event.type === 'done') sawDone = true;
+      state = applyEvent(state, run.id, event);
+    }
+    if (!sawDone) {
+      state = applyEvent(state, run.id, {
+        id: `hydrate_done_${run.id}`,
+        sessionId: run.threadId,
+        type: 'done',
+        timestamp: run.endedAt ?? run.startedAt,
+        payload: {
+          status: run.status,
+          ...(run.usage?.durationMs !== undefined ? { durationMs: run.usage.durationMs } : {}),
+        } as StreamEventPayload,
+      });
+    }
+  }
+  return state;
+}
+
+export function chipsFromSummary(summary: ContextSummary | null): ContextChip[] {
+  if (!summary) return [];
+  const chips: ContextChip[] = [];
+  for (const [index, selection] of summary.selections.entries()) {
+    const file = selection.fileName?.split(/[/\\]/).pop() ?? selection.fileName;
+    const name = selection.componentName ?? selection.tagName;
+    const line = selection.lineNumber != null ? `:${selection.lineNumber}` : '';
+    chips.push({
+      id: `selection:${index}`,
+      kind: 'selection',
+      label: file ? `${name} · ${file}${line}` : name,
+    });
+  }
+  if (summary.screenshotAttached) {
+    chips.push({ id: 'screenshot', kind: 'screenshot', label: 'Screenshot' });
+  }
+  if (summary.errorCount > 0) {
+    chips.push({
+      id: 'console',
+      kind: 'console',
+      label: countLabel(summary.errorCount, 'console error', 'console errors'),
+    });
+  }
+  if (summary.failedRequestCount > 0) {
+    chips.push({
+      id: 'network',
+      kind: 'network',
+      label: countLabel(summary.failedRequestCount, 'failed request', 'failed requests'),
+    });
+  }
+  return chips;
+}
+
+export function countLabel(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }

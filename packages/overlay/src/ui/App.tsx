@@ -1,16 +1,38 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
-import type { GitDiffSummary, ProviderType, SelectedElement, StreamEventPayload, UnifiedStreamEvent } from '@aidev/protocol';
-import { gatherContext } from '../context/index.js';
+import type {
+  GitDiffSummary,
+  ProviderCapabilities,
+  ProviderType,
+  RunMode,
+  SelectedElement,
+  StreamEventPayload,
+  UnifiedStreamEvent,
+} from '@aidev/protocol';
+import { ProviderCapabilitiesSchema } from '@aidev/protocol';
+import {
+  CONTEXT_MAX_AGE_MS,
+  gatherContext,
+  getRecentErrors,
+  subscribeContext,
+} from '../context/index.js';
+import { getRecentFailedNetworkRequests } from '../context/network.js';
+import { captureElement } from '../context/screenshot.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
 import { BottomDock } from './BottomDock.js';
 import { ChatDrawer } from './ChatDrawer.js';
+import { composerSuggestions, deriveContextChips } from './chat/chips.js';
+import type { HistoryRow } from './chat/HistoryList.js';
+import type { ProviderOption } from './chat/Composer.js';
 import {
   applyEvent,
   emptyChatState,
+  hydrateFromThread,
   startTurn,
   type ChatState,
+  type ContextChip,
+  type ContextChipKind,
   type NoticeItem,
 } from './chat/model.js';
 import { CommandPalette, type PaletteItem } from './CommandPalette.js';
@@ -113,7 +135,17 @@ export function App({ config }: AppProps) {
   const [connectionState, setConnectionState] = useState<WorkspaceConnectionState>('closed');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [provider, setProvider] = useState<ProviderType>(storedPrefs.provider ?? 'cursor');
+  const [model, setModel] = useState<string | null>(storedPrefs.model ?? null);
+  const [mode, setMode] = useState<RunMode>(storedPrefs.mode === 'ask' ? 'ask' : 'agent');
   const [availability, setAvailability] = useState<Partial<Record<ProviderType, boolean>>>({});
+  const [capabilities, setCapabilities] = useState<ProviderCapabilities[]>([]);
+  const [excludedKinds, setExcludedKinds] = useState<ContextChipKind[]>([]);
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [contextTick, setContextTick] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -149,6 +181,9 @@ export function App({ config }: AppProps) {
   const sendingRef = useRef(sending);
   const chatRef = useRef(chat);
   const undoConflictRunId = useRef<string | null>(null);
+  const composerEscape = useRef<() => boolean>(() => false);
+  const hydratedThreadId = useRef<string | null>(null);
+  const threadIdRef = useRef<string | null>(storedSession.threadId ?? null);
   sideOpenRef.current = sideOpen;
   sideTabRef.current = sideTab;
   inspectingRef.current = inspecting;
@@ -159,6 +194,7 @@ export function App({ config }: AppProps) {
   hiddenRef.current = hidden;
   sendingRef.current = sending;
   chatRef.current = chat;
+  threadIdRef.current = threadId;
 
   const sheet = isSheetViewport(viewport.width);
   const compact = isCompactViewport(viewport.width);
@@ -167,6 +203,26 @@ export function App({ config }: AppProps) {
   const offset = pillOffset(pillCorner, sideOpen, bottomOpen, sideWidth, bottomHeight, sheet);
   const projectKey = config.projectId ?? 'default';
   const gatewayUrl = config.gatewayUrl ?? DEFAULT_GATEWAY_URL;
+  const providerOptions = useMemo(
+    () => buildProviderOptions(capabilities, availability),
+    [capabilities, availability],
+  );
+  const chips = useMemo(
+    () =>
+      deriveContextChips({
+        selected,
+        screenshotUrl,
+        errors: getRecentErrors(),
+        failedRequests: getRecentFailedNetworkRequests(CONTEXT_MAX_AGE_MS),
+        autoAttach,
+        excluded: new Set(excludedKinds),
+      }),
+    [selected, screenshotUrl, autoAttach, excludedKinds, contextTick],
+  );
+  const suggestions = useMemo(() => {
+    if (chat.items.length > 0 || threadId) return [];
+    return composerSuggestions({ selected, consoleErrorCount: getRecentErrors().length });
+  }, [chat.items.length, threadId, selected, contextTick]);
 
   const workspace = useMemo<WorkspaceConnection>(() => {
     if (config.workspace) return config.workspace;
@@ -314,6 +370,7 @@ export function App({ config }: AppProps) {
           setGatewayVersion(info.version);
           if (info.providers.length === 0) return;
           setAvailability(availabilityMap(info.providers));
+          setCapabilities(info.capabilities);
           if (providerTouched.current) return;
           setProvider(preferredProvider(info.providers));
         })
@@ -416,17 +473,96 @@ export function App({ config }: AppProps) {
     }
   }, [selected]);
 
+  useEffect(() => subscribeContext(() => setContextTick((value) => value + 1)), []);
+
+  useEffect(() => {
+    setExcludedKinds((current) => current.filter((kind) => kind !== 'selection' && kind !== 'screenshot'));
+  }, [selected]);
+
+  useEffect(() => {
+    if (!selected || !autoAttach.screenshot) {
+      setScreenshotUrl(null);
+      return;
+    }
+    const element = elementRef.current;
+    if (!element?.isConnected) {
+      setScreenshotUrl(null);
+      return;
+    }
+    let cancelled = false;
+    void captureElement(element).then((url) => {
+      if (!cancelled) setScreenshotUrl(url ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, autoAttach.screenshot]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void workspace
+      .request({ type: 'thread.list' })
+      .then(async (listed) => {
+        const rows: HistoryRow[] = await Promise.all(
+          listed.threads.map(async (thread) => {
+            try {
+              const detail = await workspace.request({ type: 'thread.get', threadId: thread.id });
+              return { thread, runCount: detail.runs.length };
+            } catch {
+              return { thread, runCount: 0 };
+            }
+          }),
+        );
+        if (!cancelled) setHistoryRows(rows);
+      })
+      .catch((error) => {
+        if (!cancelled) setHistoryError(error instanceof Error ? error.message : 'Could not load history');
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [historyOpen, workspace]);
+
+  useEffect(() => {
+    if (!threadId || workspace.state !== 'open') return;
+    if (hydratedThreadId.current === threadId) return;
+    if (chatRef.current.items.length > 0) {
+      hydratedThreadId.current = threadId;
+      return;
+    }
+    let cancelled = false;
+    void workspace
+      .request({ type: 'thread.get', threadId })
+      .then((result) => {
+        if (cancelled) return;
+        hydratedThreadId.current = result.thread.id;
+        dispatchChat({ type: 'hydrate', state: hydrateFromThread(result.runs, result.events) });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, workspace]);
+
   useEffect(() => {
     savePrefs({
       theme,
       dockMode,
       provider,
+      model,
+      mode,
       autoAttach,
       pillCorner,
       sideWidth,
       bottomHeight,
     });
-  }, [theme, dockMode, provider, autoAttach, pillCorner, sideWidth, bottomHeight]);
+  }, [theme, dockMode, provider, model, mode, autoAttach, pillCorner, sideWidth, bottomHeight]);
 
   useEffect(() => {
     saveSession(projectKey, {
@@ -474,6 +610,11 @@ export function App({ config }: AppProps) {
         event.preventDefault();
         event.stopImmediatePropagation();
         setSettingsOpen(false);
+        return;
+      }
+      if (composerEscape.current()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         return;
       }
       if (inspectingRef.current) return;
@@ -553,9 +694,50 @@ export function App({ config }: AppProps) {
     dispatchChat({ type: 'reset' });
     setPrompt('');
     setThreadId(null);
+    hydratedThreadId.current = null;
+    setHistoryOpen(false);
+    setExcludedKinds([]);
     setChatUnread(false);
     setSideTab('chat');
     setSideOpen(true);
+  }
+
+  function insertSuggestion(text: string): void {
+    setPrompt((current) => {
+      const trimmed = current.trimEnd();
+      return trimmed.length === 0 ? text : `${trimmed}\n${text}`;
+    });
+  }
+
+  const searchFiles = useCallback(
+    async (query: string): Promise<string[]> => {
+      try {
+        const result = await workspace.request({ type: 'files.search', query, limit: 8 });
+        return result.files;
+      } catch {
+        return [];
+      }
+    },
+    [workspace],
+  );
+
+  async function resumeThread(id: string): Promise<void> {
+    try {
+      const result = await workspace.request({ type: 'thread.get', threadId: id });
+      hydratedThreadId.current = result.thread.id;
+      dispatchChat({ type: 'hydrate', state: hydrateFromThread(result.runs, result.events) });
+      setThreadId(result.thread.id);
+      setProvider(result.thread.provider);
+      setModel(result.thread.model);
+      setMode(result.thread.mode === 'ask' ? 'ask' : 'agent');
+      providerTouched.current = true;
+      setHistoryOpen(false);
+      setPrompt('');
+      setChatUnread(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not open that chat';
+      setHistoryError(message);
+    }
   }
 
   function executePalette(id: string): void {
@@ -729,9 +911,14 @@ export function App({ config }: AppProps) {
       if (event.type === 'done') finish();
     };
 
+    const attachedChips = chips;
+    const excluded = new Set(excludedKinds);
+    const includeSelection = Boolean(selected) && !excluded.has('selection');
+    const includeScreenshot = autoAttach.screenshot && !excluded.has('screenshot');
+    const screenshotChip = attachedChips.find((chip) => chip.kind === 'screenshot');
     setPrompt('');
     setSending(true);
-    dispatchChat({ type: 'start', input: { userText: text, chips: [], runId: localRunId } });
+    dispatchChat({ type: 'start', input: { userText: text, chips: attachedChips, runId: localRunId } });
 
     offs.push(
       workspace.on('run.event', (message) => {
@@ -758,20 +945,26 @@ export function App({ config }: AppProps) {
     };
 
     try {
-      const live = elementRef.current;
-      const selectedElement = live?.isConnected ? locateElement(live) : selected ?? undefined;
+      const live = includeSelection ? elementRef.current : null;
+      const selectedElement = includeSelection
+        ? live?.isConnected
+          ? locateElement(live)
+          : selected ?? undefined
+        : undefined;
       const context = await gatherContext(selectedElement, live, {
-        screenshot: autoAttach.screenshot,
-        consoleErrors: autoAttach.consoleErrors,
-        failedRequests: autoAttach.failedRequests,
+        screenshot: includeScreenshot && Boolean(selectedElement || screenshotChip),
+        ...(screenshotChip?.thumbnail ? { screenshotDataUrl: screenshotChip.thumbnail } : {}),
+        consoleErrors: autoAttach.consoleErrors && !excluded.has('console'),
+        failedRequests: autoAttach.failedRequests && !excluded.has('network'),
       });
       if (settled) return;
       const accepted = await workspace.request({
         type: 'run.start',
         requestId,
-        ...(threadId ? { threadId } : {}),
+        ...(threadIdRef.current ? { threadId: threadIdRef.current } : {}),
         provider,
-        mode: 'agent',
+        ...(model ? { model } : {}),
+        mode: mode === 'ask' ? 'ask' : 'agent',
         prompt: text,
         context,
         attachments: [],
@@ -831,27 +1024,50 @@ export function App({ config }: AppProps) {
           onResize={(width) => setSideWidth(clampSideWidth(width))}
           onClose={closeSide}
           onSettings={openSettings}
+          onNewChat={newChat}
+          historyOpen={historyOpen}
+          onToggleHistory={() => {
+            setHistoryOpen((value) => !value);
+            openSide('chat', true);
+          }}
         >
           {sideTab === 'chat' ? (
             <ChatDrawer
-              selected={selected}
               provider={provider}
-              availability={availability}
+              model={model}
+              mode={mode}
+              providers={providerOptions}
               gatewayStatus={status}
               prompt={prompt}
               chat={chat}
+              chips={chips}
+              suggestions={suggestions}
               sending={sending}
+              historyOpen={historyOpen}
+              historyRows={historyRows}
+              historyLoading={historyLoading}
+              historyError={historyError}
+              threadId={threadId}
               onPromptChange={setPrompt}
               onProviderChange={(next) => {
                 providerTouched.current = true;
                 setProvider(next);
+                const cap = capabilities.find((item) => item.provider === next);
+                if (model && cap && !cap.models.some((item) => item.id === model)) setModel(null);
               }}
-              onClearSelection={() => {
-                elementRef.current = null;
-                selectedLocRef.current = null;
-                setSelected(null);
+              onModelChange={setModel}
+              onModeChange={(next) => setMode(next === 'ask' ? 'ask' : 'agent')}
+              onRemoveChip={(chip: ContextChip) => {
+                setExcludedKinds((current) => (current.includes(chip.kind) ? current : [...current, chip.kind]));
+                if (chip.kind === 'selection') {
+                  elementRef.current = null;
+                  selectedLocRef.current = null;
+                  setSelected(null);
+                }
+                if (chip.kind === 'screenshot') setScreenshotUrl(null);
               }}
-              onSuggest={setPrompt}
+              onSuggest={insertSuggestion}
+              onSearchFiles={searchFiles}
               onSubmit={() => {
                 void submit();
               }}
@@ -865,6 +1081,12 @@ export function App({ config }: AppProps) {
               }}
               onKeepGoing={() => setPrompt('Keep going')}
               onNoticeAction={handleNoticeAction}
+              onResumeThread={(id) => {
+                void resumeThread(id);
+              }}
+              onEscapeOverlay={(handler) => {
+                composerEscape.current = handler;
+              }}
             />
           ) : (
             <DiffViewer workspace={workspace} summary={summary} loading={diffLoading} error={diffError} />
@@ -921,24 +1143,31 @@ export function App({ config }: AppProps) {
 async function fetchGatewayStatus(
   gatewayUrl: string,
   token: string,
-): Promise<{ providers: ProviderStatus[]; version: string | null }> {
+): Promise<{ providers: ProviderStatus[]; capabilities: ProviderCapabilities[]; version: string | null }> {
   const response = await fetch(new URL('/api/v1/status', gatewayUrl), {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!response.ok) return { providers: [], version: null };
+  if (!response.ok) return { providers: [], capabilities: [], version: null };
   const body: unknown = await response.json();
-  if (!body || typeof body !== 'object') return { providers: [], version: null };
+  if (!body || typeof body !== 'object') return { providers: [], capabilities: [], version: null };
   const record = body as { providers?: unknown; version?: unknown };
   const version = typeof record.version === 'string' ? record.version : null;
-  if (!Array.isArray(record.providers)) return { providers: [], version };
+  if (!Array.isArray(record.providers)) return { providers: [], capabilities: [], version };
   const statuses: ProviderStatus[] = [];
+  const capabilities: ProviderCapabilities[] = [];
   for (const item of record.providers) {
+    const parsed = ProviderCapabilitiesSchema.safeParse(item);
+    if (parsed.success) {
+      capabilities.push(parsed.data);
+      statuses.push({ provider: parsed.data.provider, available: parsed.data.available });
+      continue;
+    }
     if (!item || typeof item !== 'object') continue;
     const entry = item as { provider?: unknown; available?: unknown };
     if (!isProvider(entry.provider)) continue;
     statuses.push({ provider: entry.provider, available: entry.available === true });
   }
-  return { providers: statuses, version };
+  return { providers: statuses, capabilities, version };
 }
 
 function isProvider(value: unknown): value is ProviderType {
@@ -962,6 +1191,26 @@ function preferredProvider(listed: ProviderStatus[]): ProviderType {
   return listed.find((item) => item.available)?.provider ?? 'cursor';
 }
 
+function buildProviderOptions(
+  capabilities: readonly ProviderCapabilities[],
+  availability: Partial<Record<ProviderType, boolean>>,
+): ProviderOption[] {
+  const known = capabilities.length > 0 || Object.keys(availability).length > 0;
+  return PROVIDER_LABELS.map((item) => {
+    const cap = capabilities.find((entry) => entry.provider === item.id);
+    const available = cap?.available ?? availability[item.id];
+    return {
+      id: item.id,
+      label: item.label,
+      available: known ? available === true : true,
+      experimental: cap ? cap.verified === false : false,
+      ...(cap?.setup && cap.setup.length > 0 ? { setup: cap.setup.join('\n') } : {}),
+      models: cap?.models ?? [],
+      modes: cap?.modes ?? ['agent', 'ask', 'plan'],
+    };
+  });
+}
+
 function createId(): string {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
@@ -970,6 +1219,7 @@ function createId(): string {
 
 type ChatAction =
   | { type: 'reset' }
+  | { type: 'hydrate'; state: ChatState }
   | { type: 'start'; input: Parameters<typeof startTurn>[1] }
   | { type: 'stream'; localRunId: string; gatewayRunId?: string; event: UnifiedStreamEvent }
   | { type: 'retarget'; from: string; to: string }
@@ -979,6 +1229,8 @@ function reduceChat(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case 'reset':
       return emptyChatState();
+    case 'hydrate':
+      return action.state;
     case 'start':
       return startTurn(state, action.input);
     case 'retarget':

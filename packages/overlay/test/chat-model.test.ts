@@ -1,10 +1,11 @@
-import type { StreamEventPayload, UnifiedStreamEvent } from '@aidev/protocol';
+import type { Run, StreamEventPayload, UnifiedStreamEvent } from '@aidev/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   RESULT_LIMIT,
   applyEvent,
   emptyChatState,
   groupToolBlocks,
+  hydrateFromThread,
   startTurn,
   toolLabel,
   type AssistantItem,
@@ -295,6 +296,38 @@ describe('groupToolBlocks', () => {
     expect(grouped[1]).toMatchObject({ kind: 'read-group', count: 3, label: 'Read 3 files' });
     expect(grouped[2]).toEqual({ kind: 'block', block: blocks[4] });
     expect(grouped[3]).toEqual({ kind: 'block', block: blocks[5] });
+  });
+});
+
+describe('hydrateFromThread', () => {
+  it('replays stored runs through the reducer', () => {
+    const run: Run = {
+      id: RUN,
+      threadId: 'thr_1',
+      prompt: 'Make it green',
+      contextSummary: {
+        selections: [{ tagName: 'BUTTON', componentName: 'Hero', fileName: 'Hero.tsx', lineNumber: 11 }],
+        errorCount: 0,
+        logCount: 0,
+        failedRequestCount: 0,
+        screenshotAttached: false,
+      },
+      attachments: [],
+      status: 'succeeded',
+      startedAt: 1,
+      endedAt: 2,
+      checkpoint: null,
+      filesTouched: ['Hero.tsx'],
+      error: null,
+      usage: { durationMs: 12 },
+    };
+    const state = hydrateFromThread(run ? [run] : [], [
+      { runId: RUN, event: evt('chunk', { text: 'Done.', segment: 0 }) },
+      { runId: RUN, event: evt('done', {}) },
+    ]);
+    expect(state.items[0]).toMatchObject({ kind: 'user', text: 'Make it green' });
+    expect(assistantOf(state).blocks).toEqual([{ kind: 'markdown', text: 'Done.' }]);
+    expect(assistantOf(state).status).toBe('done');
   });
 });
 

@@ -93,12 +93,14 @@ describe('initDevtools', () => {
 
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 22 }));
     expect(hostClicked).toBe(false);
-    expect(shadow?.textContent).toContain('[HeroButton - Hero.tsx:42]');
+    expect(shadow?.textContent).toContain('HeroButton · Hero.tsx:42');
 
-    const suggestion = [...(shadow?.querySelectorAll('button') ?? [])].find((node) => node.textContent === 'Fix layout');
+    const suggestion = [...(shadow?.querySelectorAll('[data-action="suggestion"]') ?? [])].find((node) =>
+      node.textContent?.includes('hover'),
+    ) as HTMLButtonElement | undefined;
     suggestion?.click();
     const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
-    expect(textarea.value).toBe('Fix layout');
+    expect(textarea.value).toBe('Add a hover state to this button');
     textarea.value = 'Make it emerald';
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
 

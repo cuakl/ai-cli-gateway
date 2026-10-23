@@ -1,5 +1,11 @@
 export const CHAT_CSS = `
-.chip-row { padding-top: 10px; padding-bottom: var(--aid-space-1); }
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aid-space-1);
+  padding-top: 10px;
+  padding-bottom: var(--aid-space-1);
+}
 
 .chip {
   display: inline-flex;
@@ -18,6 +24,14 @@ export const CHAT_CSS = `
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chip-thumb {
+  width: var(--aid-space-5);
+  height: var(--aid-space-5);
+  border-radius: var(--aid-radius-sm);
+  object-fit: cover;
+  flex: none;
 }
 
 .transcript {
@@ -334,6 +348,91 @@ export const CHAT_CSS = `
   padding-bottom: 14px;
   border-top: 1px solid var(--aid-border);
   background: var(--aid-bg);
+}
+
+.composer-input { position: relative; }
+
+.mention-listbox {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--aid-space-1));
+  z-index: var(--aid-z-popover);
+  margin: 0;
+  padding: var(--aid-space-1);
+  max-height: 12em;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--aid-border);
+  border-radius: var(--aid-radius-md);
+  background: var(--aid-bg-raised);
+  box-shadow: var(--aid-shadow-lg);
+}
+
+.mention-listbox li {
+  padding: var(--aid-space-1) var(--aid-space-2);
+  border-radius: var(--aid-radius-sm);
+  color: var(--aid-text);
+  font-size: var(--aid-text-sm);
+  cursor: pointer;
+}
+
+.mention-listbox li.active,
+.mention-listbox li[aria-selected='true'] {
+  background: var(--aid-bg-hover);
+}
+
+.mention-empty {
+  color: var(--aid-text-muted);
+  cursor: default;
+}
+
+.composer-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aid-space-2);
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: var(--aid-space-2);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aid-space-1);
+}
+
+.history-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--aid-space-1);
+  width: 100%;
+  padding: var(--aid-space-2) var(--aid-space-3);
+  border-radius: var(--aid-radius-md);
+  text-align: left;
+  color: var(--aid-text);
+}
+
+.history-item:hover,
+.history-item[aria-current='true'] {
+  background: var(--aid-bg-hover);
+}
+
+.history-title {
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.history-meta {
+  color: var(--aid-text-muted);
+  font-size: var(--aid-text-xs);
 }
 
 .provider {

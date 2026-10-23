@@ -1,4 +1,4 @@
-import type { ProviderType } from '@aidev/protocol';
+import type { ProviderType, RunMode } from '@aidev/protocol';
 import {
   BOTTOM_DEFAULT,
   SIDE_CHAT_DEFAULT,
@@ -24,6 +24,8 @@ export interface OverlayPrefs {
   theme: OverlayTheme;
   dockMode: DockMode;
   provider: ProviderType;
+  model: string | null;
+  mode: RunMode;
   autoAttach: AutoAttachPrefs;
   pillCorner: PillCorner;
   sideWidth: number;
@@ -62,6 +64,10 @@ export function loadPrefs(): Partial<OverlayPrefs> {
   if (dockMode) prefs.dockMode = dockMode;
   const provider = parseProvider(record.provider);
   if (provider) prefs.provider = provider;
+  if (record.model === null) prefs.model = null;
+  else if (typeof record.model === 'string' && record.model.length > 0) prefs.model = record.model;
+  const mode = parseMode(record.mode);
+  if (mode) prefs.mode = mode;
   if (autoAttach) prefs.autoAttach = autoAttach;
   const corner = parseCorner(record.pillCorner);
   if (corner) prefs.pillCorner = corner;
@@ -102,6 +108,8 @@ export function defaultPrefs(): OverlayPrefs {
     theme: 'dark',
     dockMode: 'push',
     provider: 'cursor',
+    model: null,
+    mode: 'agent',
     autoAttach: { ...DEFAULT_AUTO_ATTACH },
     pillCorner: 'bottom-right',
     sideWidth: SIDE_CHAT_DEFAULT,
@@ -126,6 +134,11 @@ function parseAutoAttach(value: unknown): AutoAttachPrefs | undefined {
 
 function parseProvider(value: unknown): ProviderType | undefined {
   if (value === 'cursor' || value === 'claude' || value === 'codex' || value === 'antigravity') return value;
+  return undefined;
+}
+
+function parseMode(value: unknown): RunMode | undefined {
+  if (value === 'agent' || value === 'ask' || value === 'plan') return value;
   return undefined;
 }
 

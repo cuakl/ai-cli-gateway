@@ -76,7 +76,7 @@ describe('locateElement', () => {
       columnNumber: 5,
       props: {},
     });
-    expect(selectionChipLabel(selected)).toBe('Header - Header.tsx:24');
+    expect(selectionChipLabel(selected)).toBe('Header · Header.tsx:24');
   });
 
   it('prefers the fiber component name and data-loc callsite together', () => {
@@ -105,6 +105,6 @@ describe('locateElement', () => {
       columnNumber: 5,
       props: { tone: 'primary' },
     });
-    expect(selectionChipLabel(selected)).toBe('HeroButton - Hero.tsx:42');
+    expect(selectionChipLabel(selected)).toBe('HeroButton · Hero.tsx:42');
   });
 });

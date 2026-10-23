@@ -90,6 +90,13 @@ async function runLoop(page: Page, url: string): Promise<void> {
   }
 }
 
+async function shot(page: Page, name: string): Promise<void> {
+  const dir = process.env.AIDEV_E2E_SHOTS;
+  if (!dir) return;
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${dir}/${name}.png` });
+}
+
 async function exercise(page: Page, url: string): Promise<void> {
   await page.addInitScript(PAGE_HOOKS);
   await page.goto(url);
@@ -123,10 +130,12 @@ async function exercise(page: Page, url: string): Promise<void> {
     undefined,
     { timeout: 20_000 },
   );
+  await shot(page, 'chat-after-run');
 
   await page.locator('[data-action="diffs"]').click();
   await page.locator('[data-file="src/components/Hero.tsx"]').waitFor();
   await page.locator('[data-file="src/styles.css"]').waitFor();
+  await shot(page, 'review');
   await page.getByLabel('Commit message').fill('style(hero): purple rounded button');
   await page.locator('[data-action="commit"]').click();
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
