@@ -1,8 +1,8 @@
-import { useState } from 'preact/hooks';
-import type { DevtoolsBridge } from '../types.js';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TestRunnerProps {
-  bridge: DevtoolsBridge;
+  workspace: WorkspaceConnection;
   projectName?: string;
   onClose: () => void;
 }
@@ -17,28 +17,43 @@ const STATUS_LABEL: Record<TestStatus, string> = {
   stopped: 'Stopped',
 };
 
-export function TestRunner({ bridge, projectName, onClose }: TestRunnerProps) {
+export function TestRunner({ workspace, projectName, onClose }: TestRunnerProps) {
   const [status, setStatus] = useState<TestStatus>('idle');
   const [log, setLog] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const unsubscribe = useRef<Array<() => void>>([]);
 
-  async function run(): Promise<void> {
+  function clearSubs(): void {
+    for (const off of unsubscribe.current) off();
+    unsubscribe.current = [];
+  }
+
+  useEffect(() => clearSubs, []);
+
+  function run(): void {
     if (status === 'running') return;
+    clearSubs();
     setStatus('running');
     setLog('');
     setError(null);
+    unsubscribe.current = [
+      workspace.on('test.output', (message) => {
+        setLog((current) => `${current}${message.line}\n`);
+      }),
+      workspace.on('test.finished', (message) => {
+        clearSubs();
+        if (message.status === 'cancelled') {
+          setStatus('stopped');
+          setLog((current) => `${current}\nStopped.\n`);
+          return;
+        }
+        setStatus(message.status === 'passed' ? 'passed' : 'failed');
+      }),
+    ];
     try {
-      const result = await bridge.runTests((line) => {
-        setLog((current) => `${current}${line}\n`);
-      });
-      if (result.cancelled) {
-        setStatus('stopped');
-        setLog((current) => `${current}\nStopped.\n`);
-        return;
-      }
-      setStatus(result.exitCode === 0 ? 'passed' : 'failed');
-      setLog((current) => `${current}\nExited ${result.exitCode}${result.command ? ` (${result.command})` : ''}\n`);
+      workspace.send({ type: 'test.run' });
     } catch (caught) {
+      clearSubs();
       setStatus('failed');
       setError(caught instanceof Error ? caught.message : 'Tests failed to start');
     }
@@ -66,13 +81,13 @@ export function TestRunner({ bridge, projectName, onClose }: TestRunnerProps) {
             data-action="run-tests"
             disabled={status === 'running'}
             onClick={() => {
-              void run();
+              run();
             }}
           >
             Run Test Suite
           </button>
           {status === 'running' ? (
-            <button type="button" className="ghost" data-action="stop-tests" onClick={() => bridge.stopTests()}>
+            <button type="button" className="ghost" data-action="stop-tests" onClick={() => workspace.send({ type: 'test.stop' })}>
               Stop
             </button>
           ) : null}

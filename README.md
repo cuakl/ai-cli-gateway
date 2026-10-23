@@ -25,17 +25,21 @@ pnpm test
 
 ## Run the demo
 
-Two terminals, from the repository root:
+From the repository root:
 
 ```bash
-pnpm --filter @aidev/gateway dev
-```
-
-```bash
+pnpm install
+pnpm build
 pnpm demo
 ```
 
-Open http://127.0.0.1:5173.
+Open http://127.0.0.1:5173. The Vite plugin starts one gateway on `127.0.0.1:4100` when `/health` does not answer (`aidev start --detach`). Stop it with `aidev stop`, or after a build:
+
+```bash
+node packages/gateway/dist/cli.js stop
+```
+
+The first start creates `~/.aidev/token`. `AIDEV_HOME` overrides that directory.
 
 1. Click **Inspect**, then click the hero button ("Add the lamp"). The chat chip shows the component and source file.
 2. Pick a provider that `GET /health` reports as available.
@@ -88,7 +92,7 @@ ai-cli-gateway/
 | `@aidev/adapters` | CLI adapters, binary lookup, and the process watchdog. |
 | `@aidev/gateway` | HTTP, Server-Sent Events, and WebSocket on `127.0.0.1:4100`. |
 | `@aidev/overlay` | Shadow-DOM toolbar: inspect, chat, diffs, terminal, tests. |
-| `@aidev/vite` | Injects the overlay, stamps `data-loc` on JSX, and bridges the dev server. |
+| `@aidev/vite` | Injects the overlay, stamps `data-loc` on JSX, registers the project, and auto-starts the gateway. |
 
 ## Checks
 
@@ -102,10 +106,11 @@ pnpm e2e
 ## Safeguards
 
 - The gateway binds to loopback unless `HOST` is set.
-- Prompt `cwd` and file paths must stay inside `GATEWAY_ROOT` (the git root of the server process, unless you set the variable). The Vite bridge applies the same check to the project it is serving.
+- Prompt `cwd` and file paths must stay inside a registered project. The plugin registers the directory Vite is serving.
 - CLI arguments are an array passed to `spawn`. A hung process is stopped with `SIGTERM`, then `SIGKILL`. The default limit is 5 minutes.
-- The git bridge only stages paths inside the Vite project.
-- Chat prompts go from the overlay to the gateway. Git, the terminal, and tests use the Vite socket. A dirty tree is not announced in that chat, and a chat run does not hold full page reloads.
+- Git paths are confined to that project root.
+- The overlay talks only to the gateway. Chat, diffs, the terminal, and tests share the project WebSocket.
+- While a run is active the plugin holds Vite full reloads and sends one reload after the run settles. Module hot updates still apply immediately.
 - A missing or signed-out CLI returns a structured error with setup steps.
 
 Environment variables, request examples, and the error codes are in the [manual](docs/manual.md).

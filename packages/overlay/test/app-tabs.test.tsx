@@ -1,6 +1,9 @@
+import type { GitDiffSummary, UnifiedStreamEvent, WorkspaceServerMessage } from '@aidev/protocol';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GitDiffSummary } from '@aidev/protocol';
+import { uninstallContextCollectors } from '../src/context/index.js';
+import { initDevtools } from '../src/index.js';
+import { createFakeWorkspace, type FakeWorkspace } from './fake-workspace.js';
 
 options.debounceRendering = (callback) => {
   callback();
@@ -29,10 +32,6 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 
-import { uninstallContextCollectors } from '../src/context/index.js';
-import { initDevtools } from '../src/index.js';
-import type { DevtoolsBridge, GatewayBridge } from '../src/types.js';
-
 const summary: GitDiffSummary = {
   branch: 'main',
   insertions: 1,
@@ -56,8 +55,8 @@ describe('overlay tabs', () => {
   });
 
   it('switches between chat, diffs, terminal, and tests', async () => {
-    const bridge = fakeBridge();
-    const host = initDevtools({ client: idleClient(), bridge, cwd: '/repo' });
+    const workspace = createFakeWorkspace({ summary });
+    const host = initDevtools({ workspace });
     const shadow = host?.shadowRoot;
     expect(shadow).toBeTruthy();
     await vi.waitFor(() => expect(shadow?.querySelector('[data-action="diffs"]')?.getAttribute('data-count')).toBe('1'));
@@ -72,13 +71,13 @@ describe('overlay tabs', () => {
     expect(terminal).toBeTruthy();
     expect(terminal.hidden).toBe(false);
     expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeNull();
-    await vi.waitFor(() => expect(bridge.spawnPty).toHaveBeenCalled());
+    await vi.waitFor(() => expect(sentTypes(workspace, 'pty.spawn')).toBe(1));
 
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Tests"]')).toBeTruthy();
     expect(shadow?.querySelector('[aria-label="Tests"] .kicker')?.textContent).toBe('Tests');
     expect(terminal.hidden).toBe(true);
-    expect(bridge.disposePty).not.toHaveBeenCalled();
+    expect(sentTypes(workspace, 'pty.dispose')).toBe(0);
     (shadow?.querySelector('[data-action="run-tests"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.querySelector('[data-status="passed"]')).toBeTruthy());
     expect(shadow?.textContent).toContain('1 passed');
@@ -88,11 +87,15 @@ describe('overlay tabs', () => {
     (shadow?.querySelector('[data-action="terminal"]') as HTMLButtonElement).click();
     expect(terminal.hidden).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(bridge.spawnPty).toHaveBeenCalledTimes(1);
-    expect(bridge.disposePty).not.toHaveBeenCalled();
+    expect(sentTypes(workspace, 'pty.spawn')).toBe(1);
+    expect(sentTypes(workspace, 'pty.dispose')).toBe(0);
     (shadow?.querySelector('[data-action="close-terminal"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Terminal"]')).toBeNull();
-    await vi.waitFor(() => expect(bridge.disposePty).toHaveBeenCalledWith('pty_test'));
+    await vi.waitFor(() =>
+      expect(workspace.sent.some((message) => message.type === 'pty.dispose' && message.sessionId === 'pty_test')).toBe(
+        true,
+      ),
+    );
 
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('textarea')).toBeTruthy();
@@ -101,18 +104,21 @@ describe('overlay tabs', () => {
   });
 
   it('shows the package name and stops a running suite', async () => {
-    let finish: ((result: { exitCode: number; command: string; cancelled?: boolean }) => void) | undefined;
-    const bridge = fakeBridge();
-    bridge.runTests = vi.fn(
-      () =>
-        new Promise<{ exitCode: number; command: string; cancelled?: boolean }>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    bridge.stopTests = vi.fn(() => {
-      finish?.({ exitCode: 130, command: 'pnpm test', cancelled: true });
+    let emitFinished: ((message: WorkspaceServerMessage) => void) | undefined;
+    const workspace = createFakeWorkspace({
+      summary,
+      onSend(message, emit) {
+        if (message.type === 'test.run') emitFinished = emit;
+        if (message.type === 'test.stop') {
+          emitFinished?.({
+            type: 'test.finished',
+            status: 'cancelled',
+            summary: { passed: 0, failed: 0, skipped: 0, durationMs: 1 },
+          });
+        }
+      },
     });
-    const host = initDevtools({ client: idleClient(), bridge, cwd: '/repo', projectName: 'demo-react-app' });
+    const host = initDevtools({ workspace, projectName: 'demo-react-app' });
     const shadow = host?.shadowRoot;
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Tests"] .kicker')?.textContent).toBe('demo-react-app');
@@ -120,23 +126,24 @@ describe('overlay tabs', () => {
     await vi.waitFor(() => expect(shadow?.querySelector('[data-action="stop-tests"]')).toBeTruthy());
     (shadow?.querySelector('[data-action="stop-tests"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.querySelector('[data-status="stopped"]')).toBeTruthy());
-    expect(bridge.stopTests).toHaveBeenCalledOnce();
+    expect(workspace.sent.some((message) => message.type === 'test.stop')).toBe(true);
     expect(shadow?.textContent).toContain('Stopped.');
   });
 
   it('asks for a diff review after the agent edits a file', async () => {
-    const client: GatewayBridge = {
-      async checkHealth() {
-        return true;
+    const workspace = createFakeWorkspace({
+      summary,
+      onRequest(message, emit) {
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'file_edit', { filePath: 'src/App.tsx' }));
+          emit(runEvent(message.requestId, 'chunk', { text: 'Updated the button', segment: 0 }));
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
       },
-      async streamPrompt(input) {
-        input.onFileEdit?.('src/App.tsx');
-        input.onChunk?.('Updated the button');
-        input.onDone?.();
-      },
-      cancel() {},
-    };
-    const host = initDevtools({ client, bridge: fakeBridge(), cwd: '/repo' });
+    });
+    const host = initDevtools({ workspace });
     const shadow = host?.shadowRoot;
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
@@ -144,49 +151,50 @@ describe('overlay tabs', () => {
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.textContent).toContain('Review the diffs'));
+    const start = workspace.sent.find((message) => message.type === 'run.start');
+    expect(start).toMatchObject({
+      type: 'run.start',
+      mode: 'agent',
+      provider: 'cursor',
+      prompt: 'Make it emerald',
+      attachments: [],
+    });
+    expect(start?.prompt).not.toContain('<frontend_context>');
     (shadow?.querySelector('[data-action="review-diffs"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeTruthy();
     expect(shadow?.textContent).not.toContain('Review the diffs');
   });
+
+  it('updates the diff badge when the workspace pushes git.changed', async () => {
+    const workspace = createFakeWorkspace({ summary: { files: [], insertions: 0, deletions: 0 } });
+    const host = initDevtools({ workspace });
+    const shadow = host?.shadowRoot;
+    await vi.waitFor(() => expect(workspace.sent.some((message) => message.type === 'git.diff')).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    workspace.emit({ type: 'git.changed', summary });
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-action="diffs"]')?.getAttribute('data-count')).toBe('1'));
+  });
 });
 
-function fakeBridge(): DevtoolsBridge & {
-  spawnPty: ReturnType<typeof vi.fn>;
-  disposePty: ReturnType<typeof vi.fn>;
-  stopTests: ReturnType<typeof vi.fn>;
-} {
-  return {
-    async gitDiff() {
-      return summary;
-    },
-    async gitCommit() {
-      return { commitHash: 'abc1234', branch: 'main' };
-    },
-    async gitRevert() {},
-    async runTests(onLine) {
-      onLine('1 passed');
-      return { exitCode: 0, command: 'pnpm test' };
-    },
-    stopTests: vi.fn(),
-    spawnPty: vi.fn(async () => ({ sessionId: 'pty_test', fallback: false })),
-    writePty() {},
-    resizePty() {},
-    disposePty: vi.fn(),
-    onPtyData() {
-      return () => {};
-    },
-    onPtyExit() {
-      return () => {};
-    },
-  };
+function sentTypes(workspace: FakeWorkspace, type: string): number {
+  return workspace.sent.filter((message) => message.type === type).length;
 }
 
-function idleClient(): GatewayBridge {
+function runEvent(
+  requestId: string | undefined,
+  type: UnifiedStreamEvent['type'],
+  payload: UnifiedStreamEvent['payload'] = {},
+): WorkspaceServerMessage {
   return {
-    async checkHealth() {
-      return false;
+    type: 'run.event',
+    requestId,
+    runId: 'run_1',
+    event: {
+      id: `evt_${type}`,
+      sessionId: 'sess_1',
+      type,
+      timestamp: 1,
+      payload,
     },
-    async streamPrompt() {},
-    cancel() {},
   };
 }

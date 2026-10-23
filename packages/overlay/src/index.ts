@@ -22,21 +22,17 @@ export {
   PRODUCT_NAME,
   SCOPE,
 } from './brand.js';
-export type {
-  DevtoolsBridge,
-  DevtoolsConfig,
-  DevtoolsPanel,
-  GatewayBridge,
-  GatewayTransportMode,
-  StreamPromptInput,
-} from './types.js';
+export type { DevtoolsConfig, DevtoolsPanel, ProviderStatus } from './types.js';
 export {
-  GatewayCancelledError,
-  GatewayClient,
-  buildPromptMessage,
-  composePrompt,
-  consumeSseBuffer,
-  gatewayWebSocketUrl,
-} from './ui/client.js';
+  WorkspaceClient,
+  WorkspaceError,
+  workspaceSocketUrl,
+} from './ui/workspace-client.js';
+export type {
+  WorkspaceConnection,
+  WorkspaceConnectionState,
+  WorkspaceSocket,
+  WorkspaceSocketConstructor,
+} from './ui/workspace-client.js';
 
 defineAiDevtools();

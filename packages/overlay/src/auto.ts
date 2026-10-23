@@ -4,7 +4,7 @@ export {
   AiDevtoolsElement,
   DEFAULT_GATEWAY_URL,
   ElementPicker,
-  GatewayClient,
+  WorkspaceClient,
   defineAiDevtools,
   gatherContext,
   getReactSource,

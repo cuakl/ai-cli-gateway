@@ -5,7 +5,8 @@
  * The gateway is a scripted provider, so the loop does not call a real CLI or edit this repo.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -38,6 +39,8 @@ async function main(): Promise<void> {
     gateway = await buildServer({ runtime: editing.runtime, root: dir, home });
     await gateway.listen({ host: '127.0.0.1', port: 0 });
     const gatewayUrl = originOf(gateway);
+    const token = (await readFile(path.join(home, 'token'), 'utf8')).trim();
+    await assertSecurity(gatewayUrl, token, dir);
     vite = await startVite(dir, gatewayUrl, home, logs);
     browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -88,16 +91,28 @@ async function runLoop(page: Page, url: string): Promise<void> {
 }
 
 async function exercise(page: Page, url: string): Promise<void> {
+  await page.addInitScript(PAGE_HOOKS);
   await page.goto(url);
   await page.getByRole('heading', { name: 'Light for the long table.' }).waitFor();
+  await page.getByRole('img', { name: 'Gateway connected' }).waitFor();
   await fillNote(page);
 
   await page.getByRole('button', { name: 'Inspect', exact: true }).click();
   await page.locator('#hero-btn').click();
   await page.getByText(/Hero\.tsx/).first().waitFor();
   await page.getByLabel('Prompt').fill(PROMPT);
+  await page.evaluate(() => {
+    (window as Window & { __marker?: number }).__marker = 1;
+    sessionStorage.removeItem('aidev.markerAtFinish');
+  });
   await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await page.getByText('Updating the hero button to purple.').waitFor({ timeout: 20_000 });
+  await page.waitForFunction(() => sessionStorage.getItem('aidev.markerAtFinish') === '1', undefined, {
+    timeout: 20_000,
+  });
+  await page.waitForFunction(() => (window as Window & { __marker?: number }).__marker !== 1, undefined, {
+    timeout: 20_000,
+  });
+  await page.getByRole('heading', { name: 'Light for the long table.' }).waitFor();
   await page.waitForFunction(
     () => {
       const button = document.querySelector('#hero-btn');
@@ -109,14 +124,14 @@ async function exercise(page: Page, url: string): Promise<void> {
     { timeout: 20_000 },
   );
 
-  await page.getByText('The agent edited files. Review the diffs before committing.').waitFor();
-  await page.getByRole('button', { name: 'Review diffs' }).click();
+  await page.getByRole('button', { name: /^Diffs/ }).click();
   await page.locator('[data-file="src/components/Hero.tsx"]').waitFor();
   await page.locator('[data-file="src/styles.css"]').waitFor();
   await page.getByLabel('Commit message').fill('style(hero): purple rounded button');
   await page.locator('[data-action="commit"]').click();
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
   await page.getByText('No uncommitted changes.').waitFor();
+  await exerciseTerminal(page);
 }
 
 async function fillNote(page: Page): Promise<void> {
@@ -156,11 +171,40 @@ const VITE_CONFIG = `import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { aiDevtools } from '@aidev/vite';
 
+const gatewayUrl = process.env.GATEWAY_URL;
+
 export default defineConfig({
   cacheDir: '.vite-cache',
-  plugins: [react(), aiDevtools()],
+  plugins: [react(), aiDevtools({ autoStart: false, ...(gatewayUrl ? { gatewayUrl } : {}) })],
   server: { host: '127.0.0.1', strictPort: true },
 });
+`;
+
+const PAGE_HOOKS = `
+  const Native = window.WebSocket;
+  function Wrapped(url, protocols) {
+    const socket = protocols === undefined ? new Native(url) : new Native(url, protocols);
+    socket.addEventListener('message', (event) => {
+      const data = typeof event.data === 'string' ? event.data : '';
+      if (data.includes('"run.finished"')) {
+        try { sessionStorage.setItem('aidev.markerAtFinish', String(window.__marker ?? '')); } catch (error) {}
+      }
+      if (!data.includes('"pty.data"')) return;
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.type === 'pty.data' && typeof parsed.data === 'string') {
+          window.__ptyText = (window.__ptyText || '') + parsed.data;
+        }
+      } catch (error) {}
+    });
+    return socket;
+  }
+  Wrapped.prototype = Native.prototype;
+  Wrapped.CONNECTING = Native.CONNECTING;
+  Wrapped.OPEN = Native.OPEN;
+  Wrapped.CLOSING = Native.CLOSING;
+  Wrapped.CLOSED = Native.CLOSED;
+  window.WebSocket = Wrapped;
 `;
 
 function startVite(dir: string, gatewayUrl: string, home: string, logs: string[]): Promise<ViteServer> {
@@ -215,6 +259,115 @@ function originOf(app: Awaited<ReturnType<typeof buildServer>>): string {
   return `http://127.0.0.1:${address.port}`;
 }
 
+async function exerciseTerminal(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  const screen = page.locator('.xterm');
+  await screen.waitFor();
+  await screen.click();
+  await page.keyboard.type('echo hi');
+  await page.keyboard.press('Enter');
+  try {
+    await page.waitForFunction(
+      () => {
+        const raw = (window as Window & { __ptyText?: string }).__ptyText ?? '';
+        const text = raw
+          .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, '')
+          .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+          .replace(/\u001b[=>]/g, '');
+        const at = text.lastIndexOf('echo hi');
+        return at >= 0 && /(?:^|[\r\n])hi(?:\r|\n)/.test(text.slice(at + 'echo hi'.length));
+      },
+      undefined,
+      { timeout: 15_000 },
+    );
+  } catch (error) {
+    const text = await page.evaluate(() => (window as Window & { __ptyText?: string }).__ptyText ?? '');
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\n\npty data:\n${JSON.stringify(text)}`);
+  }
+  await page.evaluate(() => {
+    const el = document.querySelector('ai-devtools')?.shadowRoot?.querySelector('.xterm');
+    if (!(el instanceof HTMLElement)) throw new Error('Terminal did not render');
+    el.dataset.e2e = 'kept';
+  });
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+  await page.evaluate(() => {
+    const root = document.querySelector('ai-devtools')?.shadowRoot;
+    const section = root?.querySelector('[aria-label="Terminal"]');
+    const el = root?.querySelector('.xterm');
+    if (!(section instanceof HTMLElement) || section.hidden) throw new Error('Terminal is not visible');
+    if (!(el instanceof HTMLElement) || el.dataset.e2e !== 'kept') throw new Error('Terminal was recreated');
+    const raw = (window as Window & { __ptyText?: string }).__ptyText ?? '';
+    const text = raw
+      .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, '')
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\u001b[=>]/g, '');
+    const at = text.lastIndexOf('echo hi');
+    if (at < 0 || !/(?:^|[\r\n])hi(?:\r|\n)/.test(text.slice(at + 'echo hi'.length))) {
+      throw new Error(`Terminal lost the echo hi output:\n${text}`);
+    }
+    if (el.innerText.trim() && !el.innerText.includes('hi')) {
+      throw new Error(`Terminal text did not include hi:\n${el.innerText}`);
+    }
+  });
+  await page.locator('[data-action="close-terminal"]').click();
+}
+
+async function assertSecurity(gatewayUrl: string, token: string, root: string): Promise<void> {
+  const evil = await fetch(`${gatewayUrl}/api/v1/projects/register`, {
+    method: 'POST',
+    headers: {
+      origin: 'https://evil.example',
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ root }),
+  });
+  const allowed = evil.headers.get('access-control-allow-origin');
+  if (allowed) throw new Error(`POST with Origin https://evil.example set Access-Control-Allow-Origin: ${allowed}`);
+
+  const upgrade = await wsUpgrade(
+    `${gatewayUrl.replace('http', 'ws')}/ws?token=${encodeURIComponent(token)}`,
+    'https://evil.example',
+  );
+  if (upgrade.upgraded) throw new Error('WebSocket upgrade with Origin https://evil.example was accepted');
+  if (upgrade.status !== 403) {
+    throw new Error(`Expected the evil Origin upgrade to be rejected with 403, got ${upgrade.status}`);
+  }
+
+  const anonymous = await fetch(`${gatewayUrl}/api/v1/status`);
+  if (anonymous.status !== 401) throw new Error(`Expected a request without a token to be 401, got ${anonymous.status}`);
+}
+
+function wsUpgrade(url: string, origin: string): Promise<{ status: number; upgraded: boolean }> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const req = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      headers: {
+        connection: 'Upgrade',
+        upgrade: 'websocket',
+        'sec-websocket-version': '13',
+        'sec-websocket-key': Buffer.from('0123456789abcdef').toString('base64'),
+        origin,
+      },
+    });
+    req.on('upgrade', (res, socket) => {
+      socket.destroy();
+      resolve({ status: res.statusCode ?? 101, upgraded: true });
+    });
+    req.on('response', (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0, upgraded: false });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -227,7 +380,12 @@ function freePort(): Promise<number> {
   });
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // The in-process gateway PTY keeps Node's event loop alive after the script returns.
+    process.exit(0);
+  })
+  .catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });

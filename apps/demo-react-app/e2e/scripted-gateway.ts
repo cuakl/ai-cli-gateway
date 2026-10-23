@@ -59,6 +59,10 @@ export function createEditingRuntime(root: string): EditingRuntime {
       if (!options.prompt.includes('purple with rounded-full')) {
         throw new Error('The prompt did not ask for the hero button restyle');
       }
+      // Stay running long enough for the Vite plugin to see project.activity and hold a full reload.
+      await delay(500);
+      await touchIndex(allowed);
+      await delay(1_500);
       await paintHero(allowed);
       onEvent(createStreamEvent(sessionId, 'chunk', { text: 'Updating the hero button to purple.' }));
       onEvent(createStreamEvent(sessionId, 'file_edit', { filePath: 'src/components/Hero.tsx' }));
@@ -84,6 +88,22 @@ export function createEditingRuntime(root: string): EditingRuntime {
       },
     },
   };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function touchIndex(root: string): Promise<void> {
+  const file = path.join(root, 'index.html');
+  const html = await readFile(file, 'utf8');
+  const stamp = `<!-- reload ${Date.now()} -->`;
+  const next = html.includes('<!-- reload ')
+    ? html.replace(/<!-- reload .*? -->/, stamp)
+    : `${html.trimEnd()}\n${stamp}\n`;
+  await writeFile(file, next);
 }
 
 async function paintHero(root: string): Promise<void> {

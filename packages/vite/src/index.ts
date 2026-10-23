@@ -2,40 +2,24 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
-import type { Plugin } from 'vite';
-import { createPromptRunner, DEFAULT_GATEWAY_URL, type PromptRunner } from './bridge.js';
+import type { Plugin, ViteDevServer } from 'vite';
+import { subscribeProjectActivity } from './activity-socket.js';
+import { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE } from './brand.js';
+import { DEFAULT_GATEWAY_URL, ensureGateway } from './companion.js';
+import { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 import { injectDataLoc } from './jsx-transform.js';
 import { overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
 import { placeBeforeJsxCompilers } from './plugin-order.js';
-import { DEFAULT_RELOAD_DEBOUNCE_MS } from './hmr-guard.js';
-import { registerDevtoolsSocket } from './socket.js';
-import { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE } from './brand.js';
 import { readMachineToken, registerProject, type RegisteredProject } from './register-project.js';
 
 export { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE };
-export { createPromptRunner, DEFAULT_GATEWAY_URL } from './bridge.js';
-export type { DevtoolsPromptInput, PromptRunner, PromptSession } from './bridge.js';
+export { DEFAULT_GATEWAY_URL } from './companion.js';
 export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
-export {
-  CANCEL_EVENT,
-  GIT_COMMIT_EVENT,
-  GIT_DIFF_EVENT,
-  GIT_REVERT_EVENT,
-  PROMPT_EVENT,
-  PTY_DATA_EVENT,
-  PTY_DISPOSE_EVENT,
-  PTY_EXIT_EVENT,
-  PTY_INPUT_EVENT,
-  PTY_RESIZE_EVENT,
-  PTY_SPAWN_EVENT,
-  RUN_TESTS_EVENT,
-  STOP_TESTS_EVENT,
-  STREAM_EVENT,
-  TEST_DONE_EVENT,
-  TEST_OUTPUT_EVENT,
-} from './socket.js';
+
+/** Dev-server route the overlay hits after the gateway forgets a browser token. */
+export const CONFIG_PATH = '/@ai-devtools/config';
 
 export interface DevtoolsPluginOptions {
   /** Gateway origin. Defaults to `GATEWAY_URL` or `http://127.0.0.1:4100`. */
@@ -47,35 +31,45 @@ export interface DevtoolsPluginOptions {
   enabled?: boolean;
   /** Stamp `data-loc` onto JSX in dev. Defaults to true. */
   injectDataLoc?: boolean;
+  /**
+   * Spawn `aidev start --detach` when `/health` fails. Defaults to true.
+   * When this is false, or the spawn fails, the plugin logs `npx aidev start`.
+   */
+  autoStart?: boolean;
+}
+
+export interface InjectedDevtoolsConfig {
+  gatewayUrl: string;
+  projectId?: string;
+  browserToken?: string;
+  projectName?: string;
 }
 
 /**
- * Inject the DevTools overlay, stamp JSX with source locations, and bridge
- * `ai-devtools:prompt` / `ai-devtools:cancel` on Vite's HMR socket, plus git, PTY, and test events.
+ * Inject the DevTools overlay, stamp JSX with source locations, register the
+ * project with the gateway, and hold full reloads while a run is active.
  */
 export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   let command: 'build' | 'serve' = 'serve';
   let root = process.cwd();
   let publicPath = overlayPublicPath('/');
   let overlayFile = '';
-  let wsToken = '';
-  let wsBase = '/';
   let projectName: string | undefined;
   const gatewayUrl = resolveGatewayUrl(options.gatewayUrl);
-  let registration: Promise<RegisteredProject | null> | null = null;
-  const runner: PromptRunner = createPromptRunner({
-    gatewayUrl,
-    onFallback(fallbackUrl, provider) {
-      console.warn(
-        `[ai-devtools] Gateway at ${fallbackUrl} is unreachable. Running ${provider} through @aidev/adapters.`,
-      );
-    },
-  });
+  const autoStart = options.autoStart !== false;
+  let latest: RegisteredProject | null = null;
+  let registerNow: () => Promise<RegisteredProject | null> = async () => latest;
 
   const devActive = (): boolean => {
     if (command !== 'serve') return false;
     return options.enabled ?? true;
   };
+
+  const configFor = (registered: RegisteredProject | null): InjectedDevtoolsConfig => ({
+    gatewayUrl,
+    ...(projectName ? { projectName } : {}),
+    ...(registered ? { projectId: registered.projectId, browserToken: registered.browserToken } : {}),
+  });
 
   return {
     name: 'ai-devtools',
@@ -97,8 +91,6 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
       root = config.root;
       publicPath = overlayPublicPath(config.base);
       overlayFile = resolveOverlayBundle();
-      wsToken = config.webSocketToken;
-      wsBase = config.base || '/';
       projectName = readProjectName(root);
       if (devActive()) placeBeforeJsxCompilers(config.plugins as Plugin[]);
     },
@@ -109,17 +101,8 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
     async transformIndexHtml(html) {
       if (!devActive()) return undefined;
       if (html.includes(publicPath)) return undefined;
-      const registered = registration ? await registration : null;
-      const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify({
-        wsToken,
-        wsBase,
-        gatewayUrl,
-        cwd: root,
-        ...(projectName ? { projectName } : {}),
-        ...(registered
-          ? { projectId: registered.projectId, browserToken: registered.browserToken }
-          : {}),
-      }).replace(/</g, '\\u003c')};`;
+      const registered = await registerNow();
+      const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify(configFor(registered)).replace(/</g, '\\u003c')};`;
       return [
         {
           tag: 'script',
@@ -136,31 +119,6 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
     },
     configureServer(server) {
       if (!devActive()) return;
-      const httpServer = server.httpServer;
-      if (!server.config.server.middlewareMode && httpServer) {
-        registration = new Promise((resolve) => {
-          const finish = (): void => {
-            const address = httpServer.address();
-            const port = address && typeof address === 'object' ? address.port : server.config.server.port;
-            const hostSetting = server.config.server.host;
-            const host =
-              hostSetting === true || hostSetting === '0.0.0.0' || hostSetting === '::' || !hostSetting
-                ? '127.0.0.1'
-                : hostSetting;
-            if (!port) {
-              resolve(null);
-              return;
-            }
-            const origin = `http://${host}:${port}`;
-            void readMachineToken()
-              .then((token) => (token ? registerProject({ gatewayUrl, root, origin, token }) : null))
-              .then((result) => resolve(result))
-              .catch(() => resolve(null));
-          };
-          if (httpServer.listening) finish();
-          else httpServer.once('listening', finish);
-        });
-      }
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? '').split('?')[0] ?? '';
         if (pathname !== publicPath && pathname !== `${publicPath}.map`) {
@@ -169,12 +127,109 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
         }
         void sendOverlay(res, pathname.endsWith('.map') ? `${overlayFile}.map` : overlayFile);
       });
-      registerDevtoolsSocket(server, runner, server.config.root);
+      server.middlewares.use((req, res, next) => {
+        const pathname = (req.url ?? '').split('?')[0] ?? '';
+        if (pathname !== CONFIG_PATH) {
+          next();
+          return;
+        }
+        if (req.method && req.method !== 'GET' && req.method !== 'HEAD') {
+          next();
+          return;
+        }
+        void writeConfig(res, async () => configFor(await registerNow()));
+      });
+
+      if (server.config.server.middlewareMode || !server.httpServer) return;
+
+      const guard = createHmrGuard(server.ws, DEFAULT_RELOAD_DEBOUNCE_MS);
+      let held = false;
+      let activity: { close(): void } | null = null;
+      let activityStarted = false;
+      let boot: Promise<boolean> | null = null;
+      let announced = false;
+
+      const ensure = (): Promise<boolean> => {
+        if (boot) return boot;
+        const pending = ensureGateway({
+          gatewayUrl,
+          autoStart,
+          log: (line) => {
+            if (announced) return;
+            announced = true;
+            console.warn(line);
+          },
+        }).finally(() => {
+          if (boot === pending) boot = null;
+        });
+        boot = pending;
+        return pending;
+      };
+
+      const remember = (registered: RegisteredProject, token: string): void => {
+        latest = registered;
+        if (activityStarted) return;
+        activityStarted = true;
+        activity = subscribeProjectActivity({
+          gatewayUrl,
+          projectId: registered.projectId,
+          token,
+          onActivity(activeRuns) {
+            if (activeRuns > 0) {
+              if (!held) {
+                held = true;
+                guard.begin();
+              }
+              return;
+            }
+            if (!held) return;
+            held = false;
+            guard.end();
+          },
+        });
+      };
+
+      registerNow = async () => {
+        await whenListening(server);
+        const up = await ensure();
+        if (up) announced = false;
+        if (!up) return null;
+        const token = await readMachineToken();
+        if (!token) return null;
+        const origin = serverOrigin(server);
+        if (!origin) return null;
+        const registered = await registerProject({ gatewayUrl, root, origin, token });
+        if (registered) remember(registered, token);
+        return registered;
+      };
+
+      void registerNow();
+      server.httpServer.on('close', () => {
+        activity?.close();
+        activity = null;
+      });
     },
   };
 }
 
 export default aiDevtools;
+
+async function writeConfig(res: ServerResponse, load: () => Promise<InjectedDevtoolsConfig>): Promise<void> {
+  let config: InjectedDevtoolsConfig;
+  try {
+    config = await load();
+  } catch {
+    res.statusCode = 503;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end('{}');
+    return;
+  }
+  res.statusCode = config.projectId && config.browserToken ? 200 : 503;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(JSON.stringify(config));
+}
 
 function readProjectName(root: string): string | undefined {
   try {
@@ -190,6 +245,28 @@ function readProjectName(root: string): string | undefined {
 function resolveGatewayUrl(explicit: string | undefined): string {
   const value = explicit ?? process.env.GATEWAY_URL ?? DEFAULT_GATEWAY_URL;
   return value.replace(/\/$/, '');
+}
+
+function whenListening(server: ViteDevServer): Promise<void> {
+  const httpServer = server.httpServer;
+  if (!httpServer || httpServer.listening) return Promise.resolve();
+  return new Promise((resolve) => {
+    httpServer.once('listening', () => resolve());
+  });
+}
+
+function serverOrigin(server: ViteDevServer): string | null {
+  const address = server.httpServer?.address();
+  const port = address && typeof address === 'object' ? address.port : server.config.server.port;
+  if (!port) return null;
+  const hostSetting = server.config.server.host;
+  const host =
+    hostSetting === true || hostSetting === '0.0.0.0' || hostSetting === '::' || !hostSetting
+      ? '127.0.0.1'
+      : hostSetting;
+  const hostname = host.includes(':') ? `[${host}]` : host;
+  const protocol = server.config.server.https ? 'https' : 'http';
+  return `${protocol}://${hostname}:${port}`;
 }
 
 async function sendOverlay(res: ServerResponse, file: string): Promise<void> {

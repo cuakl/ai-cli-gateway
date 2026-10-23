@@ -1,23 +1,41 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { GitCommitRequest, GitDiffSummary, ProviderType, SelectedElement } from '@aidev/protocol';
-import type { ProviderStatus } from '../types.js';
+import type { GitDiffSummary, ProviderType, SelectedElement, UnifiedStreamEvent } from '@aidev/protocol';
 import { gatherContext } from '../context/index.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
-import type { DevtoolsConfig, DevtoolsPanel } from '../types.js';
-import { createDevtoolsBridge } from './bridge.js';
+import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type DevtoolsPanel, type ProviderStatus } from '../types.js';
 import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
-import { GatewayCancelledError, GatewayClient } from './client.js';
 import { DiffViewer } from './DiffViewer.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
 import { Toolbar } from './Toolbar.js';
+import {
+  WorkspaceClient,
+  WorkspaceError,
+  type WorkspaceConnection,
+  type WorkspaceConnectionState,
+} from './workspace-client.js';
 
 export interface AppProps {
   config: DevtoolsConfig;
 }
 
 const REVIEW_NOTICE = 'The agent edited files. Review the diffs before committing.';
+
+const disconnectedWorkspace: WorkspaceConnection = {
+  state: 'closed',
+  request() {
+    return Promise.reject(new WorkspaceError('disconnected', 'Workspace is not connected'));
+  },
+  send() {},
+  on() {
+    return () => {};
+  },
+  onStateChange() {
+    return () => {};
+  },
+  close() {},
+};
 
 export function App({ config }: AppProps) {
   const [inspecting, setInspecting] = useState(false);
@@ -39,36 +57,42 @@ export function App({ config }: AppProps) {
   const elementRef = useRef<Element | null>(null);
   const pickerRef = useRef<ElementPicker | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
+  const stopRun = useRef<(() => void) | null>(null);
+  const runCleanup = useRef<(() => void) | null>(null);
 
-  const client = useMemo(
-    () =>
-      config.client ??
-      new GatewayClient({
-        gatewayUrl: config.gatewayUrl,
-        cwd: config.cwd,
-        transport: config.transport,
-        ...(config.token ? { token: config.token } : {}),
-      }),
-    [config.client, config.cwd, config.gatewayUrl, config.token, config.transport],
-  );
-  const bridge = useMemo(() => config.bridge ?? createDevtoolsBridge(), [config.bridge]);
+  const workspace = useMemo<WorkspaceConnection>(() => {
+    if (config.workspace) return config.workspace;
+    if (!config.projectId || !config.browserToken) return disconnectedWorkspace;
+    return new WorkspaceClient({
+      gatewayUrl: config.gatewayUrl ?? DEFAULT_GATEWAY_URL,
+      projectId: config.projectId,
+      browserToken: config.browserToken,
+    });
+  }, [config.browserToken, config.gatewayUrl, config.projectId, config.workspace]);
 
   const refreshDiffs = useCallback(async (): Promise<number> => {
     setDiffLoading(true);
     try {
-      const next = await bridge.gitDiff();
-      setSummary(next);
-      setDiffCount(next.files.length);
+      const result = await workspace.request({ type: 'git.diff' });
+      setSummary(result.summary);
+      setDiffCount(result.summary.files.length);
       setDiffError(null);
-      return next.files.length;
+      return result.summary.files.length;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not load the diff';
-      if (message !== 'Dev server bridge is unavailable') setDiffError(message);
+      const message = visibleDiffError(error);
+      setDiffError(message);
       return 0;
     } finally {
       setDiffLoading(false);
     }
-  }, [bridge]);
+  }, [workspace]);
+
+  useEffect(() => {
+    if (config.workspace || workspace === disconnectedWorkspace) return;
+    return () => workspace.close();
+  }, [config.workspace, workspace]);
+
+  useEffect(() => () => runCleanup.current?.(), []);
 
   useLayoutEffect(() => {
     const picker = new ElementPicker({
@@ -101,47 +125,56 @@ export function App({ config }: AppProps) {
     if (node instanceof HTMLElement) node.scrollTop = node.scrollHeight;
   }, [messages, panel]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     void refreshDiffs();
-  }, [refreshDiffs]);
+    return workspace.on('git.changed', (message) => {
+      setSummary(message.summary);
+      setDiffCount(message.summary.files.length);
+      setDiffError(null);
+      setDiffLoading(false);
+    });
+  }, [refreshDiffs, workspace]);
 
-  useEffect(() => {
-    if (panel === 'diffs') void refreshDiffs();
-  }, [panel, refreshDiffs]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = (): void => {
-      void client.checkHealth().then(
-        (ok) => {
-          if (!cancelled) setStatus(ok ? 'connected' : 'idle');
-        },
-        () => {
-          if (!cancelled) setStatus('idle');
-        },
-      );
-      if (!client.listProviders) return;
-      void client.listProviders().then((listed) => {
-        if (cancelled || listed.length === 0) return;
-        setAvailability(availabilityMap(listed));
-        if (providerTouched.current) return;
-        setProvider(preferredProvider(listed));
-      });
+  useLayoutEffect(() => {
+    const apply = (state: WorkspaceConnectionState): void => {
+      setStatus(state === 'open' ? 'connected' : 'idle');
+      if (state === 'open') void refreshDiffs();
     };
-    tick();
-    const timer = window.setInterval(tick, 5_000);
+    apply(workspace.state);
+    return workspace.onStateChange(apply);
+  }, [refreshDiffs, workspace]);
+
+  useLayoutEffect(() => {
+    let cancelled = false;
+    const load = (): void => {
+      const token = config.browserToken;
+      if (!token || workspace.state !== 'open') return;
+      const gatewayUrl = config.gatewayUrl ?? DEFAULT_GATEWAY_URL;
+      void fetchProviderAvailability(gatewayUrl, token)
+        .then((listed) => {
+          if (cancelled || listed.length === 0) return;
+          setAvailability(availabilityMap(listed));
+          if (providerTouched.current) return;
+          setProvider(preferredProvider(listed));
+        })
+        .catch(() => {});
+    };
+    load();
+    const off = workspace.onStateChange((state) => {
+      if (state === 'open') load();
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      off();
     };
-  }, [client]);
+  }, [config.browserToken, config.gatewayUrl, workspace]);
 
-  function updateAssistant(id: string, next: (current: string) => string, pending: boolean): void {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === id ? { ...message, text: next(message.text), pending } : message,
-      ),
-    );
+  function pushStatus(text: string): void {
+    setMessages((current) => {
+      const last = current[current.length - 1];
+      if (last?.role === 'status' && last.text === text) return current;
+      return [...current, { id: createId(), role: 'status', text }];
+    });
   }
 
   function selectPanel(next: DevtoolsPanel): void {
@@ -158,7 +191,65 @@ export function App({ config }: AppProps) {
     const text = prompt.trim();
     if (!text || sending) return;
     const assistantId = createId();
+    const requestId = createId();
+    let assistantText = '';
     let sawEdit = false;
+    let stopped = false;
+    let settled = false;
+    let runId: string | undefined;
+    const offs: Array<() => void> = [];
+
+    const writeAssistant = (value: string, isError = false): void => {
+      assistantText = value;
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantId
+            ? { ...item, text: value, pending: false, ...(isError ? { error: true } : {}) }
+            : item,
+        ),
+      );
+    };
+
+    const cleanup = (): void => {
+      for (const off of offs.splice(0)) off();
+      if (runCleanup.current === cleanup) runCleanup.current = null;
+    };
+
+    const finish = (failure?: string): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      stopRun.current = null;
+      if (stopped) writeAssistant(assistantText || 'Stopped.');
+      else if (failure) writeAssistant(assistantText ? `${assistantText}\n${failure}` : failure, true);
+      else writeAssistant(assistantText || 'The agent finished without text output.');
+      if (!stopped && !failure && sawEdit) {
+        void refreshDiffs().then((count) => {
+          if (count > 0) setNotice(REVIEW_NOTICE);
+        });
+      }
+      setSending(false);
+    };
+
+    const applyEvent = (event: UnifiedStreamEvent): void => {
+      if (event.type === 'chunk' && event.payload.segment === -1) {
+        const noticeText = event.payload.text?.trim();
+        if (noticeText) pushStatus(noticeText);
+        return;
+      }
+      if (event.type === 'chunk' && event.payload.text) writeAssistant(assistantText + event.payload.text);
+      if (event.type === 'tool_call' && event.payload.toolName) {
+        const path = toolPath(event.payload.toolArgs) ?? event.payload.filePath;
+        pushStatus(activityLabel(event.payload.toolName, path));
+      }
+      if (event.type === 'file_edit') sawEdit = true;
+      if (event.type === 'error') {
+        const messageText = event.payload.error ?? 'The agent reported an error';
+        writeAssistant(assistantText ? `${assistantText}\n${messageText}` : messageText, true);
+      }
+      if (event.type === 'done') finish();
+    };
+
     setPrompt('');
     setSending(true);
     setMessages((current) => [
@@ -166,60 +257,50 @@ export function App({ config }: AppProps) {
       { id: createId(), role: 'user', text },
       { id: assistantId, role: 'assistant', text: '', pending: true },
     ]);
+
+    offs.push(
+      workspace.on('run.event', (message) => {
+        if (message.requestId !== requestId && message.runId !== runId) return;
+        applyEvent(message.event);
+      }),
+    );
+    offs.push(
+      workspace.on('run.finished', (message) => {
+        if (message.requestId !== requestId && message.run.id !== runId) return;
+        if (message.run.status === 'cancelled') stopped = true;
+        if (message.run.error && !stopped) {
+          finish(message.run.error.message);
+          return;
+        }
+        finish();
+      }),
+    );
+    runCleanup.current = cleanup;
+    stopRun.current = () => {
+      stopped = true;
+      if (runId) workspace.send({ type: 'run.cancel', runId });
+      finish();
+    };
+
     try {
       const live = elementRef.current;
       const selectedElement = live?.isConnected ? locateElement(live) : selected ?? undefined;
       const context = await gatherContext(selectedElement, live);
-      await client.streamPrompt({
+      if (settled) return;
+      const accepted = await workspace.request({
+        type: 'run.start',
+        requestId,
         provider,
+        mode: 'agent',
         prompt: text,
-        cwd: config.cwd,
         context,
-        onChunk(chunk) {
-          updateAssistant(assistantId, (current) => current + chunk, false);
-        },
-        onTool(toolName, filePath) {
-          const label = activityLabel(toolName, filePath);
-          setMessages((current) => {
-            const last = current[current.length - 1];
-            if (last?.role === 'status' && last.text === label) return current;
-            return [...current, { id: createId(), role: 'status', text: label }];
-          });
-        },
-        onFileEdit() {
-          sawEdit = true;
-        },
-        onError(message) {
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === assistantId
-                ? {
-                    ...item,
-                    text: item.text ? `${item.text}\n${message}` : message,
-                    pending: false,
-                    error: true,
-                  }
-                : item,
-            ),
-          );
-        },
-        onDone() {
-          updateAssistant(assistantId, (current) => current || 'The agent finished without text output.', false);
-          if (!sawEdit) return;
-          void refreshDiffs().then((count) => {
-            if (count > 0) setNotice(REVIEW_NOTICE);
-          });
-        },
+        attachments: [],
       });
+      runId = accepted.runId;
+      if (stopped) workspace.send({ type: 'run.cancel', runId: accepted.runId });
     } catch (error) {
-      if (error instanceof GatewayCancelledError) {
-        updateAssistant(assistantId, (current) => current || 'Stopped.', false);
-      } else {
-        const message = error instanceof Error ? error.message : 'Prompt failed';
-        updateAssistant(assistantId, (current) => (current ? `${current}\n${message}` : message), false);
-      }
-    } finally {
-      setSending(false);
+      const message = error instanceof Error ? error.message : 'Prompt failed';
+      finish(message);
     }
   }
 
@@ -280,37 +361,58 @@ export function App({ config }: AppProps) {
               onSubmit={() => {
                 void submit();
               }}
-              onStop={() => client.cancel()}
+              onStop={() => stopRun.current?.()}
               onClose={() => setPanel(null)}
             />
           ) : null}
           {panel === 'diffs' ? (
             <DiffViewer
+              workspace={workspace}
               summary={summary}
               loading={diffLoading}
               error={diffError}
-              onCommit={async (request: GitCommitRequest) => {
-                const result = await bridge.gitCommit(request);
-                await refreshDiffs();
-                return result;
-              }}
-              onDiscard={async (files) => {
-                await bridge.gitRevert(files);
-                await refreshDiffs();
-              }}
               onClose={() => setPanel(null)}
             />
           ) : null}
           {terminalMounted ? (
-            <TerminalPanel bridge={bridge} hidden={panel !== 'terminal'} onClose={closeTerminal} />
+            <TerminalPanel workspace={workspace} hidden={panel !== 'terminal'} onClose={closeTerminal} />
           ) : null}
           {panel === 'tests' ? (
-            <TestRunner bridge={bridge} projectName={config.projectName} onClose={() => setPanel(null)} />
+            <TestRunner workspace={workspace} projectName={config.projectName} onClose={() => setPanel(null)} />
           ) : null}
         </div>
       ) : null}
     </div>
   );
+}
+
+async function fetchProviderAvailability(gatewayUrl: string, token: string): Promise<ProviderStatus[]> {
+  const response = await fetch(new URL('/api/v1/status', gatewayUrl), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) return [];
+  const body: unknown = await response.json();
+  if (!body || typeof body !== 'object' || !('providers' in body)) return [];
+  const providers = (body as { providers?: unknown }).providers;
+  if (!Array.isArray(providers)) return [];
+  const statuses: ProviderStatus[] = [];
+  for (const item of providers) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as { provider?: unknown; available?: unknown };
+    if (!isProvider(record.provider)) continue;
+    statuses.push({ provider: record.provider, available: record.available === true });
+  }
+  return statuses;
+}
+
+function isProvider(value: unknown): value is ProviderType {
+  return value === 'cursor' || value === 'claude' || value === 'codex' || value === 'antigravity';
+}
+
+function visibleDiffError(error: unknown): string | null {
+  if (error instanceof WorkspaceError && error.code === 'disconnected') return null;
+  if (error instanceof Error) return error.message;
+  return 'Could not load the diff';
 }
 
 function availabilityMap(listed: ProviderStatus[]): Partial<Record<ProviderType, boolean>> {
@@ -340,6 +442,15 @@ function activityLabel(toolName: string, filePath?: string): string {
   if (!filePath) return verb;
   const short = filePath.split('/').slice(-2).join('/');
   return `${verb} ${short}`;
+}
+
+function toolPath(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  for (const key of ['path', 'filePath', 'file_path', 'target_file']) {
+    const value = args[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
 }
 
 function createId(): string {

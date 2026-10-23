@@ -1,14 +1,15 @@
+import type { UnifiedStreamEvent, WorkspaceServerMessage } from '@aidev/protocol';
 import { toPng } from 'html-to-image';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { uninstallContextCollectors } from '../src/context/index.js';
+import { HIGHLIGHT_ID } from '../src/inspector/picker.js';
+import { initDevtools } from '../src/index.js';
+import { createFakeWorkspace } from './fake-workspace.js';
 
 options.debounceRendering = (callback) => {
   callback();
 };
-import { uninstallContextCollectors } from '../src/context/index.js';
-import { HIGHLIGHT_ID } from '../src/inspector/picker.js';
-import { initDevtools } from '../src/index.js';
-import type { GatewayBridge } from '../src/types.js';
 
 vi.mock('html-to-image', () => ({
   toPng: vi.fn(async () => 'data:image/png;base64,overlay'),
@@ -25,8 +26,8 @@ describe('initDevtools', () => {
   });
 
   it('mounts one shadow root and does not duplicate the host', () => {
-    const first = initDevtools({ gatewayUrl: 'http://127.0.0.1:4100', client: fakeClient() });
-    const second = initDevtools({ client: fakeClient() });
+    const first = initDevtools({ gatewayUrl: 'http://127.0.0.1:4100', workspace: createFakeWorkspace() });
+    const second = initDevtools({ workspace: createFakeWorkspace() });
     expect(first).toBe(second);
     expect(document.querySelectorAll('ai-devtools')).toHaveLength(1);
     const shadow = first?.shadowRoot;
@@ -38,22 +39,18 @@ describe('initDevtools', () => {
     expect(document.querySelector('#ai-devtools-root')).toBeNull();
   });
 
-  it('inspects an element and streams the gateway reply into the drawer', async () => {
-    const seen: string[] = [];
-    const client: GatewayBridge = {
-      async checkHealth() {
-        return true;
+  it('inspects an element and streams the workspace reply into the drawer', async () => {
+    const workspace = createFakeWorkspace({
+      onRequest(message, emit) {
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'chunk', { text: 'Updated the button', segment: 0 }));
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
       },
-      async streamPrompt(input) {
-        seen.push(input.prompt);
-        expect(input.context?.selectedElement?.tagName).toBe('BUTTON');
-        expect(input.context?.screenshotBase64).toContain('base64');
-        input.onChunk?.('Updated the button');
-        input.onDone?.();
-      },
-      cancel() {},
-    };
-    const host = initDevtools({ client, cwd: '/repo' });
+    });
+    const host = initDevtools({ workspace });
     const shadow = host?.shadowRoot;
     expect(shadow).toBeTruthy();
 
@@ -96,9 +93,7 @@ describe('initDevtools', () => {
     expect(hostClicked).toBe(false);
     expect(shadow?.textContent).toContain('[HeroButton - Hero.tsx:42]');
 
-    const suggestion = [...(shadow?.querySelectorAll('button') ?? [])].find(
-      (node) => node.textContent === 'Fix layout',
-    );
+    const suggestion = [...(shadow?.querySelectorAll('button') ?? [])].find((node) => node.textContent === 'Fix layout');
     suggestion?.click();
     const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
     expect(textarea.value).toBe('Fix layout');
@@ -108,85 +103,147 @@ describe('initDevtools', () => {
     const send = shadow?.querySelector('[data-action="send"]') as HTMLButtonElement;
     send.click();
     await vi.waitFor(() => expect(shadow?.textContent).toContain('Updated the button'));
-    expect(seen).toEqual(['Make it emerald']);
+    const start = workspace.sent.find((message) => message.type === 'run.start');
+    expect(start?.type === 'run.start' ? start.prompt : '').toBe('Make it emerald');
+    expect(start?.type === 'run.start' ? start.context.selectedElement?.tagName : '').toBe('BUTTON');
+    expect(start?.type === 'run.start' ? start.context.screenshotBase64 : '').toContain('base64');
+    expect(start?.type === 'run.start' ? start.attachments : null).toEqual([]);
+    expect(start?.type === 'run.start' ? start.mode : '').toBe('agent');
+    expect(start?.type === 'run.start' ? start.prompt : '').not.toContain('<frontend_context>');
     expect(toPng).toHaveBeenCalled();
     button.remove();
   });
 
-  it('sends the cwd and gateway URL injected by the Vite plugin', async () => {
-    (globalThis as { __AI_DEVTOOLS__?: { cwd: string; gatewayUrl: string } }).__AI_DEVTOOLS__ = {
-      cwd: '/work/demo-react-app',
-      gatewayUrl: 'http://127.0.0.1:4199',
-    };
-    const seen: Array<string | undefined> = [];
-    const host = initDevtools({
-      client: {
-        async checkHealth() {
-          return true;
-        },
-        async streamPrompt(input) {
-          seen.push(input.cwd);
-          input.onDone?.();
-        },
-        cancel() {},
+  it('renders a segment -1 chunk as a notice line', async () => {
+    const workspace = createFakeWorkspace({
+      onRequest(message, emit) {
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'chunk', { text: 'Working tree is dirty', segment: -1 }));
+          emit(runEvent(message.requestId, 'chunk', { text: 'Done editing', segment: 0 }));
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
       },
     });
+    const host = initDevtools({ workspace });
     const shadow = host?.shadowRoot;
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
     textarea.value = 'Tint the hero';
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(seen).toEqual(['/work/demo-react-app']));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('Done editing'));
+    expect(shadow?.querySelector('.activity')?.textContent).toContain('Working tree is dirty');
+    const assistant = shadow?.querySelector('.message.assistant');
+    expect(assistant?.textContent).toContain('Done editing');
+    expect(assistant?.textContent).not.toContain('Working tree is dirty');
   });
 
-  it('prefers an explicit cwd over the injected project root', async () => {
-    (globalThis as { __AI_DEVTOOLS__?: { cwd: string } }).__AI_DEVTOOLS__ = {
-      cwd: '/work/injected',
+  it('opens the project socket from the config injected by the Vite plugin', () => {
+    (globalThis as { __AI_DEVTOOLS__?: Record<string, string> }).__AI_DEVTOOLS__ = {
+      gatewayUrl: 'http://127.0.0.1:4199',
+      projectId: 'proj_demo',
+      browserToken: 'tok_browser',
     };
-    const seen: Array<string | undefined> = [];
-    const host = initDevtools({
-      cwd: '/work/explicit',
-      client: {
-        async checkHealth() {
-          return false;
-        },
-        async streamPrompt(input) {
-          seen.push(input.cwd);
-          input.onDone?.();
-        },
-        cancel() {},
+    const sockets: Array<{ url: string }> = [];
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        constructor(url: string) {
+          sockets.push(this);
+          this.url = url;
+        }
+        url: string;
+        readyState = 0;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: { data: unknown }) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        onclose: ((event: Event) => void) | null = null;
+        send(): void {}
+        close(): void {
+          this.readyState = 3;
+          this.onclose?.(new Event('close'));
+        }
       },
+    );
+    initDevtools();
+    expect(sockets[0]?.url).toBe('ws://127.0.0.1:4199/api/v1/projects/proj_demo/ws?token=tok_browser');
+  });
+
+  it('prefers an explicit project id and token over the injected config', () => {
+    (globalThis as { __AI_DEVTOOLS__?: Record<string, string> }).__AI_DEVTOOLS__ = {
+      gatewayUrl: 'http://127.0.0.1:4199',
+      projectId: 'proj_injected',
+      browserToken: 'tok_injected',
+    };
+    const sockets: Array<{ url: string }> = [];
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        constructor(url: string) {
+          sockets.push(this);
+          this.url = url;
+        }
+        url: string;
+        readyState = 0;
+        onopen: ((event: Event) => void) | null = null;
+        onmessage: ((event: { data: unknown }) => void) | null = null;
+        onerror: ((event: Event) => void) | null = null;
+        onclose: ((event: Event) => void) | null = null;
+        send(): void {}
+        close(): void {
+          this.readyState = 3;
+          this.onclose?.(new Event('close'));
+        }
+      },
+    );
+    initDevtools({
+      gatewayUrl: 'http://127.0.0.1:4100',
+      projectId: 'proj_explicit',
+      browserToken: 'tok_explicit',
     });
-    const shadow = host?.shadowRoot;
-    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
-    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
-    textarea.value = 'Tint the hero';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(seen).toEqual(['/work/explicit']));
+    expect(sockets[0]?.url).toBe('ws://127.0.0.1:4100/api/v1/projects/proj_explicit/ws?token=tok_explicit');
+  });
+
+  it('follows the workspace connection on the status dot', () => {
+    const workspace = createFakeWorkspace({ state: 'closed' });
+    const host = initDevtools({ workspace });
+    const dot = (): Element | null | undefined => host?.shadowRoot?.querySelector('.status');
+    expect(dot()?.getAttribute('data-state')).toBe('idle');
+    workspace.setState('open');
+    expect(dot()?.getAttribute('data-state')).toBe('connected');
+    workspace.setState('connecting');
+    expect(dot()?.getAttribute('data-state')).toBe('idle');
+    workspace.setState('closed');
+    expect(dot()?.getAttribute('data-state')).toBe('idle');
   });
 
   it('disables send when the selected provider is not installed', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain('/api/v1/status');
+      expect(new Headers(init?.headers).get('authorization')).toBe('Bearer tok_test');
+      return new Response(
+        JSON.stringify({
+          status: 'ok',
+          version: '0.0.0',
+          activeRuns: 0,
+          projects: [],
+          providers: [
+            { provider: 'cursor', available: false, binaryPath: null },
+            { provider: 'claude', available: false, binaryPath: null },
+            { provider: 'antigravity', available: false, binaryPath: null },
+            { provider: 'codex', available: false, binaryPath: null },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
     const host = initDevtools({
-      cwd: '/repo',
-      client: {
-        async checkHealth() {
-          return true;
-        },
-        async listProviders() {
-          return [
-            { provider: 'cursor', available: false },
-            { provider: 'claude', available: false },
-            { provider: 'antigravity', available: false },
-            { provider: 'codex', available: false },
-          ];
-        },
-        async streamPrompt() {
-          throw new Error('should not send');
-        },
-        cancel() {},
-      },
+      workspace: createFakeWorkspace({ state: 'open' }),
+      gatewayUrl: 'http://127.0.0.1:4100',
+      browserToken: 'tok_test',
     });
     const shadow = host?.shadowRoot;
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
@@ -203,15 +260,25 @@ describe('initDevtools', () => {
     expect(claude.textContent).toContain('not installed');
     expect(shadow?.querySelector('.hint')?.textContent).toContain('not on PATH');
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    expect(fetchMock).toHaveBeenCalled();
   });
 });
 
-function fakeClient(): GatewayBridge {
+function runEvent(
+  requestId: string | undefined,
+  type: UnifiedStreamEvent['type'],
+  payload: UnifiedStreamEvent['payload'] = {},
+): WorkspaceServerMessage {
   return {
-    async checkHealth() {
-      return false;
+    type: 'run.event',
+    requestId,
+    runId: 'run_1',
+    event: {
+      id: `evt_${type}_${String(payload.segment ?? 'n')}`,
+      sessionId: 'sess_1',
+      type,
+      timestamp: 1,
+      payload,
     },
-    async streamPrompt() {},
-    cancel() {},
   };
 }

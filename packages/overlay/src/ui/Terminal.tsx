@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
-import type { DevtoolsBridge } from '../types.js';
+import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TerminalPanelProps {
-  bridge: DevtoolsBridge;
+  workspace: WorkspaceConnection;
   hidden?: boolean;
   onClose: () => void;
 }
 
-export function TerminalPanel({ bridge, hidden = false, onClose }: TerminalPanelProps) {
+export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,24 +57,24 @@ export function TerminalPanel({ bridge, hidden = false, onClose }: TerminalPanel
         };
         safeFit();
 
-        const offData = bridge.onPtyData((id, data) => {
+        const offData = workspace.on('pty.data', (message) => {
           if (!sessionId) {
-            pendingOutput.push({ id, data });
+            pendingOutput.push({ id: message.sessionId, data: message.data });
             return;
           }
-          if (id === sessionId) term?.write(data);
+          if (message.sessionId === sessionId) term?.write(message.data);
         });
-        const offExit = bridge.onPtyExit((id, code) => {
-          if (id === sessionId) term?.write(`\r\n[process exited with code ${code}]\r\n`);
+        const offExit = workspace.on('pty.exit', (message) => {
+          if (message.sessionId === sessionId) term?.write(`\r\n[process exited with code ${message.code}]\r\n`);
         });
         cleanups.push(offData, offExit);
 
         const input = term.onData((data) => {
           if (!sessionId) pendingInput.push(data);
-          else bridge.writePty(sessionId, data);
+          else workspace.send({ type: 'pty.input', sessionId, data });
         });
         const resize = term.onResize(({ cols, rows }) => {
-          if (sessionId) bridge.resizePty(sessionId, cols, rows);
+          if (sessionId) workspace.send({ type: 'pty.resize', sessionId, cols, rows });
         });
         cleanups.push(() => input.dispose(), () => resize.dispose());
 
@@ -86,16 +86,20 @@ export function TerminalPanel({ bridge, hidden = false, onClose }: TerminalPanel
           cleanups.push(() => observer.disconnect());
         }
 
-        const session = await bridge.spawnPty(term.cols || 80, term.rows || 24);
+        const session = await workspace.request({
+          type: 'pty.spawn',
+          cols: term.cols || 80,
+          rows: term.rows || 24,
+        });
         if (cancelled) {
-          bridge.disposePty(session.sessionId);
+          workspace.send({ type: 'pty.dispose', sessionId: session.sessionId });
           return;
         }
         sessionId = session.sessionId;
         for (const chunk of pendingOutput.splice(0)) {
           if (chunk.id === sessionId) term.write(chunk.data);
         }
-        for (const chunk of pendingInput.splice(0)) bridge.writePty(sessionId, chunk);
+        for (const chunk of pendingInput.splice(0)) workspace.send({ type: 'pty.input', sessionId, data: chunk });
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : 'Terminal failed to start');
       }
@@ -103,11 +107,11 @@ export function TerminalPanel({ bridge, hidden = false, onClose }: TerminalPanel
 
     return () => {
       cancelled = true;
-      if (sessionId) bridge.disposePty(sessionId);
+      if (sessionId) workspace.send({ type: 'pty.dispose', sessionId });
       for (const cleanup of cleanups) cleanup();
       term?.dispose();
     };
-  }, [bridge]);
+  }, [workspace]);
 
   return (
     <section className="drawer wide" aria-label="Terminal" hidden={hidden} aria-hidden={hidden}>

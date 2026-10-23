@@ -1,9 +1,16 @@
 import { h, render } from 'preact';
+import { GLOBAL_CONFIG_KEY } from '../brand.js';
 import { installContextCollectors } from '../context/index.js';
 import { OVERLAY_CSS, OVERLAY_FONT, OVERLAY_TEXT } from '../styles.js';
 import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig } from '../types.js';
 import { App } from '../ui/App.js';
-import { readDevtoolsWindowConfig } from '../ui/bridge.js';
+
+interface InjectedDevtoolsConfig {
+  gatewayUrl?: string;
+  projectName?: string;
+  projectId?: string;
+  browserToken?: string;
+}
 
 export class AiDevtoolsElement extends HTMLElement {
   private readonly shadow: ShadowRoot;
@@ -33,17 +40,23 @@ export class AiDevtoolsElement extends HTMLElement {
   }
 
   private resolvedConfig(): DevtoolsConfig {
-    const injected = readDevtoolsWindowConfig();
+    const injected = readInjectedConfig();
     return {
-      ...this.config,
       gatewayUrl:
-        this.config.gatewayUrl ??
-        this.getAttribute('gateway-url') ??
+        nonempty(this.config.gatewayUrl) ??
+        nonempty(this.getAttribute('gateway-url')) ??
         nonempty(injected.gatewayUrl) ??
         DEFAULT_GATEWAY_URL,
-      cwd: this.config.cwd ?? this.getAttribute('cwd') ?? nonempty(injected.cwd) ?? '.',
+      projectId:
+        nonempty(this.config.projectId) ??
+        nonempty(this.getAttribute('project-id')) ??
+        nonempty(injected.projectId),
+      browserToken:
+        nonempty(this.config.browserToken) ??
+        nonempty(this.getAttribute('browser-token')) ??
+        nonempty(injected.browserToken),
       projectName: nonempty(this.config.projectName) ?? nonempty(injected.projectName),
-      token: nonempty(this.config.token) ?? nonempty(injected.browserToken),
+      workspace: this.config.workspace,
     };
   }
 
@@ -99,7 +112,12 @@ export function defineAiDevtools(): void {
   customElements.define(OVERLAY_TAG, AiDevtoolsElement);
 }
 
-function nonempty(value: string | undefined): string | undefined {
+function readInjectedConfig(): InjectedDevtoolsConfig {
+  const host = globalThis as { [GLOBAL_CONFIG_KEY]?: InjectedDevtoolsConfig };
+  return host[GLOBAL_CONFIG_KEY] ?? {};
+}
+
+function nonempty(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }

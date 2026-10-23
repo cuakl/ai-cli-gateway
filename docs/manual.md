@@ -4,32 +4,27 @@ This is the operator's guide for the gateway and the in-browser overlay: how to 
 
 ## The loop
 
-The overlay collects context in the page and sends each chat prompt straight to the gateway. Git diffs, the terminal, and tests go over the Vite dev socket. The gateway runs one already-authenticated CLI in the project directory and normalizes its output into a single event stream. The CLI writes files on disk. Vite hot-reloads them. You commit from the drawer.
+The overlay collects context in the page and sends every command to the gateway over one project WebSocket: chat, diffs, the terminal, and tests. The gateway runs one already-authenticated CLI in the project directory and normalizes its output into a single event stream. The CLI writes files on disk. Vite hot-reloads them. You commit from the drawer.
 
 ```
 browser overlay  →  gateway :4100  →  agent | agy | claude | codex
-        │                 ↑
-        │                 └── chat stream events
-        └─ Vite dev socket: git, terminal, tests
+                         ↑
+                         └── project WebSocket (runs, git, terminal, tests)
 ```
 
-Toolbar chat does not use the Vite socket. The plugin still listens for `ai-devtools:prompt`. On that path only, it can run the adapter in-process when the gateway is down, warn about a dirty git tree, and hold full page reloads. The overlay never sends prompts there, so none of those three apply to a chat from the toolbar.
+The Vite plugin does not serve those commands. It injects the overlay, registers the project, and holds a full page reload while `project.activity` reports a run in progress.
 
 ## Run the Lumen demo
 
-From the repository root, in two terminals:
+From the repository root:
 
 ```bash
 pnpm install
 pnpm build
-pnpm --filter @aidev/gateway dev
-```
-
-```bash
 pnpm demo
 ```
 
-Open http://127.0.0.1:5173. The toolbar is injected in development only.
+Open http://127.0.0.1:5173. The toolbar is injected in development only. If nothing is listening on `127.0.0.1:4100`, the plugin runs `aidev start --detach` and waits up to 5 seconds. Set `autoStart: false` to skip that and print `npx aidev start` instead. `AIDEV_HOME` chooses the directory for the machine token; the default is `~/.aidev`.
 
 ![The Lumen storefront and the AI DevTools toolbar](images/lumen-storefront.png)
 
@@ -54,7 +49,7 @@ The status body includes `activeRuns`, `projects`, and `providers`. `GET /api/v1
 
 ## Use the overlay
 
-The toolbar is a custom element, `<ai-devtools>`, rendered in an open shadow root so the page's CSS does not restyle it. The dot next to the name is green when `GET /health` succeeds.
+The toolbar is a custom element, `<ai-devtools>`, rendered in an open shadow root so the page's CSS does not restyle it. The dot next to the name is green when the project WebSocket is open.
 
 ### Inspect and chat
 
@@ -74,7 +69,7 @@ The prompt sent to the CLI includes:
 
 Suggestions ("Fix layout", "Make responsive", "Add hover state") only fill the box. Send with the button or with Cmd/Ctrl+Enter. **Stop** cancels the running session. Send stays disabled, with a tooltip, when the selected provider is known to be missing. Those options are disabled in the provider menu.
 
-A dirty or conflicted git tree is not announced in the chat. After the agent edits files, a notice offers **Review diffs**.
+A conflicted git tree stops the run. A dirty tree is shown as a notice in the chat. After the agent edits files, a notice offers **Review diffs**.
 
 ### Diffs
 
@@ -88,7 +83,7 @@ The badge on the toolbar is the number of files in the summary.
 
 ### Terminal
 
-**Terminal** starts `$SHELL` (or `bash`) in the Vite project directory and connects it to an xterm.js pane. `node-pty` is used when its native binding loads. If it does not, the plugin falls back to a piped interactive shell.
+**Terminal** starts `$SHELL` (or `bash`) in the project directory and connects it to an xterm.js pane. The gateway uses `node-pty` when its native binding loads. If it does not, it falls back to a piped interactive shell.
 
 ![A shell session in the demo directory](images/lumen-terminal.png)
 
@@ -118,22 +113,21 @@ export default defineConfig({
 
 During `serve` the plugin does four things:
 
-1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__`: the Vite WebSocket token, the gateway URL, the project root used as `cwd`, and the `name` from `package.json` when it has one.
-2. Serves the overlay bundle from `@aidev/overlay`.
+1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__` with `gatewayUrl`, `projectId`, `browserToken`, and `projectName` (the `name` from `package.json` when it has one).
+2. Serves the overlay bundle from `@aidev/overlay`, and `GET /@ai-devtools/config`, which registers again and returns a fresh browser token. The overlay calls that after the project socket closes on an auth failure, because a gateway restart drops in-memory browser tokens.
 3. Writes `data-loc` onto JSX elements that do not already have one. The column is Babel's 0-based column.
-4. Handles git diff, commit, revert, PTY, and test messages on Vite's HMR socket. Chat prompts are not in that list. The overlay calls the gateway itself. The socket still accepts `ai-devtools:prompt`, but the toolbar does not send it.
+4. Connects to the project WebSocket with the machine token, listens for `project.activity`, and holds Vite `full-reload` messages while `activeRuns > 0`. One reload is sent 250ms after the count returns to 0. Module hot updates still apply as files change. If the gateway drops, that socket reconnects with backoff.
 
 `aiDevtools()` accepts:
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `gatewayUrl` | `GATEWAY_URL` or `http://127.0.0.1:4100` | Gateway origin injected into the page. Toolbar chat calls it directly. |
-| `enabled` | `true` while serving, `false` for builds | Turns injection and the socket bridge off. |
+| `gatewayUrl` | `GATEWAY_URL` or `http://127.0.0.1:4100` | Gateway origin injected into the page. |
+| `enabled` | `true` while serving, `false` for builds | Turns injection, registration, and the reload hold off. |
 | `injectDataLoc` | `true` | Turns the JSX source stamp off. |
+| `autoStart` | `true` | When `/health` fails, spawn `aidev start --detach` and poll for 5 seconds. `false` logs `npx aidev start` instead of spawning. |
 
-The file watcher waits briefly for a write to finish. The plugin can also hold Vite `full-reload` messages, but only while a prompt is running on the socket. Toolbar chat does not start that hold, so a chat run does not delay a full reload. Module hot updates still apply as files change.
-
-Start the gateway with `aidev start` (or `pnpm --filter @aidev/gateway dev`). The first start creates `~/.aidev` (`AIDEV_HOME` overrides that directory), a mode `0600` machine token, and `config.json`. Register a repo with `aidev projects add <path>`, or set `GATEWAY_ROOT` to auto-register one root at startup. The Vite plugin registers the project it is serving and injects a project-scoped browser token. A prompt `cwd` must resolve inside a registered project. A symlink whose target leaves that project is rejected.
+The file watcher waits briefly for a write to finish. The first start creates `~/.aidev` (`AIDEV_HOME` overrides that directory), a mode `0600` machine token, and `config.json`. Register a repo with `aidev projects add <path>`, or set `GATEWAY_ROOT` to auto-register one root at startup. The Vite plugin registers the project it is serving and injects a project-scoped browser token. A prompt `cwd` must resolve inside a registered project. A symlink whose target leaves that project is rejected.
 
 ## Call the gateway directly
 
@@ -286,7 +280,7 @@ Each adapter turns that CLI's JSON or NDJSON into the same event types. Text bec
 | `GATEWAY_LOG_LEVEL` | `@aidev/adapters` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. Tests force `silent`. |
 | `GATEWAY_PROVIDER` | example client | first detected CLI, preferring `antigravity` | Provider for `pnpm --filter @aidev/gateway client`. |
 | `GATEWAY_CWD` | example client | the current directory | Working directory sent with that prompt. It has to sit inside a registered project. |
-| `SHELL` | terminal bridge | the process shell, or `bash` | Shell spawned for the in-browser terminal. |
+| `SHELL` | gateway PTY | the process shell, or `bash` | Shell spawned for the in-browser terminal. |
 
 ## `aidev`
 
@@ -316,13 +310,13 @@ There is no API-key variable. Each CLI keeps its own login.
 - **Terminal.** PTY spawn requires a token that can access the project. The child environment drops variables matching `TOKEN`, `SECRET`, `KEY`, or `PASSWORD`, and keeps `PATH`-like names. `allowRemoteShell` defaults to false; on loopback the token check is what gates the shell.
 - **No shell for CLIs.** Adapter `spawn` is called with `shell: false`. `which` is `execFile`, and command names that contain shell metacharacters are ignored.
 - **Watchdog.** The default timeout is 5 minutes (`timeoutMs` overrides it). On expiry the process group receives `SIGTERM`, then `SIGKILL` if it is still alive.
-- **Reload debounce.** The file watcher waits for writes to settle. Holding `full-reload` until a prompt ends is wired to the socket prompt listener. Toolbar chat does not use that listener, so it does not hold reloads.
+- **Reload hold.** The file watcher waits for writes to settle. The plugin also subscribes to `project.activity` and holds Vite `full-reload` payloads while `activeRuns > 0`, then flushes one reload 250ms after the count returns to 0. Module updates are not held.
 
 ## Troubleshooting
 
 **The toolbar never appears.** The plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart `vite` after `pnpm build` so it picks up the overlay bundle. The page source should contain `/@ai-devtools/overlay.js`.
 
-**The status dot stays idle.** The gateway is not reachable at the injected URL. Start `@aidev/gateway`, or set `GATEWAY_URL`. Toolbar chat calls the gateway directly, so prompts do not run while it is down.
+**The status dot stays idle.** The project WebSocket did not open. The plugin auto-starts the gateway unless `autoStart` is false. If it is still down, run `npx aidev start`, or set `GATEWAY_URL` to the gateway you already started.
 
 **`provider_unavailable`.** The binary is not on `PATH` and not in the lookup paths above. The response `setup` array is the short version of what to install and which command to run once so the CLI can sign in.
 

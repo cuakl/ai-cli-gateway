@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { GitCommitRequest, GitDiffFile, GitDiffHunk, GitDiffSummary } from '@aidev/protocol';
+import type { GitDiffFile, GitDiffHunk, GitDiffSummary } from '@aidev/protocol';
+import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface DiffViewerProps {
+  workspace: WorkspaceConnection;
   summary: GitDiffSummary | null;
   loading: boolean;
   error: string | null;
-  onCommit: (request: GitCommitRequest) => Promise<{ commitHash: string; branch: string }>;
-  onDiscard: (files?: string[]) => Promise<void>;
   onClose: () => void;
 }
 
-export function DiffViewer({ summary, loading, error, onCommit, onDiscard, onClose }: DiffViewerProps) {
+export function DiffViewer({ workspace, summary, loading, error, onClose }: DiffViewerProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [push, setPush] = useState(false);
@@ -36,10 +36,11 @@ export function DiffViewer({ summary, loading, error, onCommit, onDiscard, onClo
     setActionError(null);
     setStatus(null);
     try {
-      const result = await onCommit({
+      const result = await workspace.request({
+        type: 'git.commit',
         message: text,
+        paths: files.map((file) => file.path),
         push,
-        files: files.map((file) => file.path),
       });
       setMessage('');
       setStatus(
@@ -60,7 +61,10 @@ export function DiffViewer({ summary, loading, error, onCommit, onDiscard, onClo
     setActionError(null);
     setStatus(null);
     try {
-      await onDiscard(files.map((file) => file.path));
+      await workspace.request({
+        type: 'git.discard',
+        paths: files.map((file) => file.path),
+      });
       setConfirming(false);
       setStatus('Discarded uncommitted changes.');
     } catch (caught) {

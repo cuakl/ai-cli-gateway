@@ -5,11 +5,8 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build, createServer, type ResolvedConfig, type ViteDevServer } from 'vite';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createStreamEvent } from '@aidev/protocol';
-import aiDevtools, { aiDevtools as namedPlugin, STREAM_EVENT } from '../src/index.js';
+import aiDevtools, { aiDevtools as namedPlugin } from '../src/index.js';
 import { resolveOverlayBundle } from '../src/overlay-path.js';
-import { registerDevtoolsSocket } from '../src/socket.js';
-import type { PromptRunner } from '../src/bridge.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -48,15 +45,19 @@ describe('aiDevtools', () => {
     const injected = html.match(/__AI_DEVTOOLS__=(\{.*?\});/);
     expect(injected?.[1]).toBeTruthy();
     const config = JSON.parse(injected?.[1] ?? '{}') as {
-      wsToken?: string;
       gatewayUrl?: string;
-      cwd?: string;
       projectName?: string;
+      projectId?: string;
+      browserToken?: string;
+      wsToken?: string;
+      cwd?: string;
     };
-    expect(config.wsToken).toEqual(expect.any(String));
     expect(config.gatewayUrl).toBe('http://127.0.0.1:4100');
-    expect(config.cwd).toBe(server.config.root);
     expect(config.projectName).toBe('@aidev/vite');
+    expect(config.projectId).toBeUndefined();
+    expect(config.browserToken).toBeUndefined();
+    expect(config.wsToken).toBeUndefined();
+    expect(config.cwd).toBeUndefined();
 
     const transformed = await server.transformRequest('/test/fixtures/element.tsx');
     expect(transformed?.code).toContain('test/fixtures/element.tsx:3:4');
@@ -121,87 +122,6 @@ describe('aiDevtools', () => {
     expect(htmlResult).toBeUndefined();
   });
 });
-
-describe('devtools socket', () => {
-  it('streams gateway events and cancels the active session', async () => {
-    const events: unknown[] = [];
-    let cancelled = false;
-    const runner: PromptRunner = {
-      async start(_input, onEvent) {
-        onEvent(createStreamEvent('sess_live', 'chunk', { text: 'hello' }));
-        return {
-          sessionId: 'sess_live',
-          async cancel() {
-            cancelled = true;
-          },
-        };
-      },
-    };
-    const listeners = new Map<string, (data: unknown, client: StreamClient) => void>();
-    const server = {
-      config: {
-        root: '/proj',
-        logger: { error() {}, warn() {} },
-      },
-      ws: {
-        on(event: string, listener: (data: unknown, client: StreamClient) => void) {
-          listeners.set(event, listener);
-        },
-      },
-    };
-    registerDevtoolsSocket(server as unknown as ViteDevServer, runner, '/proj');
-    const client: StreamClient = {
-      send(event, data) {
-        events.push({ event, data });
-      },
-    };
-    await listeners.get('ai-devtools:prompt')?.(
-      { provider: 'antigravity', prompt: 'Tighten the hero', files: ['src/App.tsx'] },
-      client,
-    );
-    expect(events).toEqual([
-      { event: STREAM_EVENT, data: { event: expect.objectContaining({ type: 'chunk', payload: { text: 'hello' } }) } },
-    ]);
-    await listeners.get('ai-devtools:cancel')?.({}, client);
-    expect(cancelled).toBe(true);
-  });
-
-  it('rejects a prompt that has no provider', async () => {
-    const events: Array<{ event: string; data: { event: { type: string; payload: { error?: string } } } }> = [];
-    const runner: PromptRunner = {
-      async start() {
-        throw new Error('should not run');
-      },
-    };
-    const listeners = new Map<string, (data: unknown, client: StreamClient) => void>();
-    registerDevtoolsSocket(
-      {
-        config: { root: '/proj', logger: { error() {} } },
-        ws: {
-          on(event: string, listener: (data: unknown, client: StreamClient) => void) {
-            listeners.set(event, listener);
-          },
-        },
-      } as unknown as ViteDevServer,
-      runner,
-      '/proj',
-    );
-    await listeners.get('ai-devtools:prompt')?.(
-      { prompt: 'hello' },
-      {
-        send(event, data) {
-          events.push({ event, data: data as { event: { type: string; payload: { error?: string } } } });
-        },
-      },
-    );
-    expect(events.map((entry) => entry.data.event.type)).toEqual(['error', 'done']);
-    expect(events[0]?.data.event.payload.error).toContain('provider');
-  });
-});
-
-interface StreamClient {
-  send(event: string, data?: unknown): void;
-}
 
 function listen(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{
   url: string;

@@ -1,8 +1,9 @@
+import type { GitDiffSummary } from '@aidev/protocol';
 import { h, options, render } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GitDiffSummary } from '@aidev/protocol';
 import { OVERLAY_CSS } from '../src/styles.js';
 import { DiffViewer } from '../src/ui/DiffViewer.js';
+import { createFakeWorkspace } from './fake-workspace.js';
 
 options.debounceRendering = (callback) => {
   callback();
@@ -52,17 +53,15 @@ describe('DiffViewer', () => {
   });
 
   it('renders modified files, hunk colors, and commit or discard actions', async () => {
-    const onCommit = vi.fn(async () => ({ commitHash: 'abc1234def', branch: 'main' }));
-    const onDiscard = vi.fn(async () => {});
+    const workspace = createFakeWorkspace();
     const host = document.createElement('div');
     document.body.appendChild(host);
     render(
       h(DiffViewer, {
+        workspace,
         summary,
         loading: false,
         error: null,
-        onCommit,
-        onDiscard,
         onClose: () => {},
       }),
       host,
@@ -102,17 +101,21 @@ describe('DiffViewer', () => {
     push.checked = true;
     push.dispatchEvent(new Event('change', { bubbles: true }));
     (host.querySelector('[data-action="commit"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(onCommit).toHaveBeenCalledOnce());
-    expect(onCommit).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(workspace.sent.some((message) => message.type === 'git.commit')).toBe(true));
+    expect(workspace.sent.find((message) => message.type === 'git.commit')).toMatchObject({
       message: 'feat: emerald button',
       push: true,
-      files: ['src/App.tsx', 'src/Hero.tsx'],
+      paths: ['src/App.tsx', 'src/Hero.tsx'],
     });
     expect(host.textContent).toContain('abc1234');
 
     (host.querySelector('[data-action="discard"]') as HTMLButtonElement).click();
     expect(host.textContent).toContain('Discard uncommitted changes?');
     (host.querySelector('[data-action="confirm-discard"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(onDiscard).toHaveBeenCalledWith(['src/App.tsx', 'src/Hero.tsx']));
+    await vi.waitFor(() =>
+      expect(workspace.sent.find((message) => message.type === 'git.discard')).toMatchObject({
+        paths: ['src/App.tsx', 'src/Hero.tsx'],
+      }),
+    );
   });
 });
