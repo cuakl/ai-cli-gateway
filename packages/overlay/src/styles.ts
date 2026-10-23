@@ -5,6 +5,7 @@ import { DOCKS_CSS } from './ui/styles/docks.js';
 import { INSPECTOR_BANNER_CSS } from './ui/styles/inspector-banner.js';
 import { MODAL_CSS } from './ui/styles/modal.js';
 import { TERMINAL_CSS } from './ui/styles/terminal.js';
+import { CONSOLE_CSS } from './ui/styles/console.js';
 import { TESTS_CSS } from './ui/styles/tests.js';
 import { TOAST_CSS } from './ui/styles/toast.js';
 import { TOOLBAR_CSS } from './ui/styles/toolbar.js';
@@ -28,6 +29,7 @@ export const OVERLAY_CSS = [
   DIFF_CSS,
   TERMINAL_CSS,
   TESTS_CSS,
+  CONSOLE_CSS,
   TOAST_CSS,
   MODAL_CSS,
 ].join('\n');

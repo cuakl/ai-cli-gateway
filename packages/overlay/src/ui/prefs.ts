@@ -93,7 +93,9 @@ export function loadSession(projectId: string): Partial<OverlaySession> {
   if (typeof record.sideOpen === 'boolean') session.sideOpen = record.sideOpen;
   if (record.sideTab === 'chat' || record.sideTab === 'diffs') session.sideTab = record.sideTab;
   if (typeof record.bottomOpen === 'boolean') session.bottomOpen = record.bottomOpen;
-  if (record.bottomTab === 'terminal' || record.bottomTab === 'tests') session.bottomTab = record.bottomTab;
+  if (record.bottomTab === 'terminal' || record.bottomTab === 'tests' || record.bottomTab === 'console') {
+    session.bottomTab = record.bottomTab;
+  }
   if (typeof record.prompt === 'string') session.prompt = record.prompt;
   if (typeof record.threadId === 'string' || record.threadId === null) session.threadId = record.threadId;
   if (typeof record.runId === 'string' || record.runId === null) session.runId = record.runId;

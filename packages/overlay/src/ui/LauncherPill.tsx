@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import {
+  ConsoleIcon,
   CrosshairIcon,
   FlaskConicalIcon,
   GitCompareIcon,
@@ -21,6 +22,7 @@ export interface LauncherPillProps {
   bottomOpen: boolean;
   bottomTab: BottomTab;
   diffCount: number;
+  errorCount: number;
   chatUnread: boolean;
   status: PillStatus;
   compact: boolean;
@@ -33,6 +35,7 @@ export interface LauncherPillProps {
   onSelectReview: () => void;
   onSelectTerminal: () => void;
   onSelectTests: () => void;
+  onSelectConsole: () => void;
 }
 
 const STATUS_LABEL: Record<PillStatus, string> = {
@@ -48,6 +51,7 @@ export function LauncherPill({
   bottomOpen,
   bottomTab,
   diffCount,
+  errorCount,
   chatUnread,
   status,
   compact,
@@ -60,6 +64,7 @@ export function LauncherPill({
   onSelectReview,
   onSelectTerminal,
   onSelectTests,
+  onSelectConsole,
 }: LauncherPillProps) {
   const [drag, setDrag] = useState<{ left: number; top: number } | null>(null);
   const origin = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -158,6 +163,17 @@ export function LauncherPill({
       <PillButton action="tests" label="Tests" pressed={bottomOpen && bottomTab === 'tests'} onClick={onSelectTests}>
         <FlaskConicalIcon />
       </PillButton>
+      <PillButton
+        action="console"
+        label="Console"
+        pressed={bottomOpen && bottomTab === 'console'}
+        count={errorCount}
+        countTone="danger"
+        badgeAction="error-badge"
+        onClick={onSelectConsole}
+      >
+        <ConsoleIcon />
+      </PillButton>
     </div>
   );
 }
@@ -167,6 +183,8 @@ function PillButton({
   label,
   pressed,
   count = 0,
+  countTone,
+  badgeAction,
   unread = false,
   onClick,
   children,
@@ -175,23 +193,31 @@ function PillButton({
   label: string;
   pressed: boolean;
   count?: number;
+  countTone?: 'danger';
+  badgeAction?: string;
   unread?: boolean;
   onClick: () => void;
   children: ComponentChildren;
 }) {
+  const counted = action === 'diffs' || action === 'console';
+  const ariaLabel = counted && count > 0 ? `${label}, ${count}` : label;
   return (
     <button
       type="button"
       data-action={action}
-      data-count={action === 'diffs' ? count : undefined}
-      aria-label={label}
+      data-count={counted ? count : undefined}
+      aria-label={ariaLabel}
       aria-pressed={pressed}
       title={label}
       onClick={onClick}
     >
       {children}
       <span className="pill-label">{label}</span>
-      {count > 0 ? <span className="count">{count}</span> : null}
+      {count > 0 ? (
+        <span className="count" data-action={badgeAction} data-tone={countTone} data-count={count}>
+          {count}
+        </span>
+      ) : null}
       {unread ? <span className="pill-unread" aria-label="Unread reply" /> : null}
     </button>
   );

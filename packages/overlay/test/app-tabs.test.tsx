@@ -74,8 +74,12 @@ describe('overlay tabs', () => {
     await vi.waitFor(() => expect(sentTypes(workspace, 'pty.spawn')).toBe(1));
 
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
-    expect(shadow?.querySelector('[aria-label="Tests"]')).toBeTruthy();
-    expect(shadow?.querySelector('[aria-label="Tests"] .kicker')?.textContent).toBe('Tests');
+    expect(shadow?.querySelector('section[aria-label="Tests"]')).toBeTruthy();
+    (shadow?.querySelector('[data-action="console"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('section[aria-label="Console"]')).toBeTruthy();
+    expect(shadow?.querySelector('section[aria-label="Tests"]')).toBeNull();
+    (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('section[aria-label="Tests"] .kicker')?.textContent).toBe('Tests');
     expect(terminal.hidden).toBe(true);
     expect(sentTypes(workspace, 'pty.dispose')).toBe(0);
     (shadow?.querySelector('[data-action="run-tests"]') as HTMLButtonElement).click();

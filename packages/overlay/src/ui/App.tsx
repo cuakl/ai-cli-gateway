@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
 import type {
+  FailedNetworkRequest,
+  FrontendError,
   GitDiffSummary,
   ProviderCapabilities,
   ProviderType,
@@ -9,10 +11,15 @@ import type {
   UnifiedStreamEvent,
 } from '@aidev/protocol';
 import { ProviderCapabilitiesSchema } from '@aidev/protocol';
+import type { ConsoleEntry } from '../context/entries.js';
 import {
   CONTEXT_MAX_AGE_MS,
   gatherContext,
+  getErrorCountSinceRun,
   getRecentErrors,
+  getViteError,
+  markRunStart,
+  setViteFixHandler,
   subscribeContext,
 } from '../context/index.js';
 import { getRecentFailedNetworkRequests } from '../context/network.js';
@@ -22,7 +29,7 @@ import { ElementPicker } from '../inspector/picker.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
 import { BottomDock } from './BottomDock.js';
 import { ChatDrawer } from './ChatDrawer.js';
-import { composerSuggestions, deriveContextChips } from './chat/chips.js';
+import { chipFromConsoleEntry, composerSuggestions, deriveContextChips } from './chat/chips.js';
 import type { HistoryRow } from './chat/HistoryList.js';
 import type { ProviderOption } from './chat/Composer.js';
 import {
@@ -36,6 +43,7 @@ import {
   type NoticeItem,
 } from './chat/model.js';
 import { CommandPalette, type PaletteItem } from './CommandPalette.js';
+import { ConsolePanel } from './ConsolePanel.js';
 import { DiffViewer } from './DiffViewer.js';
 import {
   eventInsideOverlay,
@@ -141,6 +149,9 @@ export function App({ config }: AppProps) {
   const [availability, setAvailability] = useState<Partial<Record<ProviderType, boolean>>>({});
   const [capabilities, setCapabilities] = useState<ProviderCapabilities[]>([]);
   const [excludedKinds, setExcludedKinds] = useState<ContextChipKind[]>([]);
+  const [pinnedChips, setPinnedChips] = useState<ContextChip[]>([]);
+  const [pinnedErrors, setPinnedErrors] = useState<FrontendError[]>([]);
+  const [pinnedRequests, setPinnedRequests] = useState<FailedNetworkRequest[]>([]);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [contextTick, setContextTick] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -231,18 +242,20 @@ export function App({ config }: AppProps) {
     () => buildProviderOptions(capabilities, availability),
     [capabilities, availability],
   );
-  const chips = useMemo(
-    () =>
-      deriveContextChips({
-        selected,
-        screenshotUrl,
-        errors: getRecentErrors(),
-        failedRequests: getRecentFailedNetworkRequests(CONTEXT_MAX_AGE_MS),
-        autoAttach,
-        excluded: new Set(excludedKinds),
-      }),
-    [selected, screenshotUrl, autoAttach, excludedKinds, contextTick],
-  );
+  const errorCount = getErrorCountSinceRun();
+  const chips = useMemo(() => {
+    const derived = deriveContextChips({
+      selected,
+      screenshotUrl,
+      errors: getRecentErrors(),
+      failedRequests: getRecentFailedNetworkRequests(CONTEXT_MAX_AGE_MS),
+      autoAttach,
+      excluded: new Set(excludedKinds),
+      viteError: getViteError()?.message ?? null,
+    });
+    const pinnedKinds = new Set(pinnedChips.map((chip) => chip.kind));
+    return [...derived.filter((chip) => !pinnedKinds.has(chip.kind)), ...pinnedChips];
+  }, [selected, screenshotUrl, autoAttach, excludedKinds, contextTick, pinnedChips]);
   const suggestions = useMemo(() => {
     if (chat.items.length > 0 || threadId) return [];
     return composerSuggestions({ selected, consoleErrorCount: getRecentErrors().length });
@@ -307,6 +320,7 @@ export function App({ config }: AppProps) {
       { id: 'review', group: 'Actions', label: 'Open Review' },
       { id: 'run-tests', group: 'Actions', label: 'Run tests' },
       { id: 'terminal', group: 'Actions', label: 'Open terminal' },
+      { id: 'console', group: 'Actions', label: 'Open console' },
       { id: 'toggle-theme', group: 'Actions', label: 'Toggle theme' },
       { id: 'settings', group: 'Actions', label: 'Settings' },
       { id: 'hide', group: 'Actions', label: 'Hide toolbar until reload' },
@@ -509,6 +523,11 @@ export function App({ config }: AppProps) {
       if (host instanceof HTMLElement) host.focus();
       return;
     }
+    if (bottomTab === 'console') {
+      const filter = root.querySelector('[data-action="console-filter-all"]');
+      if (filter instanceof HTMLElement) filter.focus();
+      return;
+    }
     const run = root.querySelector('[data-action="run-tests"]');
     if (run instanceof HTMLElement) run.focus();
   }, [bottomOpen, bottomTab]);
@@ -534,6 +553,21 @@ export function App({ config }: AppProps) {
   }, [selected]);
 
   useEffect(() => subscribeContext(() => setContextTick((value) => value + 1)), []);
+
+  useEffect(() => {
+    setViteFixHandler((error) => {
+      fixWithAi({
+        id: `err:vite:${error.timestamp}:${error.message}`,
+        filter: 'vite',
+        timestamp: error.timestamp,
+        message: error.message,
+        stack: error.stack,
+        fixable: true,
+        error,
+      });
+    });
+    return () => setViteFixHandler(null);
+  }, []);
 
   useEffect(() => {
     setExcludedKinds((current) => current.filter((kind) => kind !== 'selection' && kind !== 'screenshot'));
@@ -742,7 +776,7 @@ export function App({ config }: AppProps) {
   }
 
   function closeBottom(disposeTerminal: boolean): void {
-    const action = bottomTabRef.current === 'terminal' ? 'terminal' : 'tests';
+    const action = bottomTabRef.current;
     if (disposeTerminal) setTerminalMounted(false);
     setBottomOpen(false);
     queueMicrotask(() => focusAction(action));
@@ -773,9 +807,23 @@ export function App({ config }: AppProps) {
     rememberSession({ prompt: '', threadId: null, runId: null });
     setHistoryOpen(false);
     setExcludedKinds([]);
+    setPinnedChips([]);
+    setPinnedErrors([]);
+    setPinnedRequests([]);
     setChatUnread(false);
     setSideTab('chat');
     setSideOpen(true);
+  }
+
+  function fixWithAi(entry: ConsoleEntry): void {
+    const chip = chipFromConsoleEntry(entry);
+    setPinnedChips([chip]);
+    setPinnedErrors(entry.error ? [entry.error] : []);
+    setPinnedRequests(entry.request ? [entry.request] : []);
+    setExcludedKinds((current) => current.filter((kind) => kind !== chip.kind));
+    setPrompt('Fix this error');
+    setChatUnread(false);
+    openSide('chat', true);
   }
 
   function insertSuggestion(text: string): void {
@@ -849,6 +897,10 @@ export function App({ config }: AppProps) {
     }
     if (id === 'terminal') {
       openBottom('terminal', true);
+      return;
+    }
+    if (id === 'console') {
+      openBottom('console', true);
       return;
     }
     if (id === 'toggle-theme') {
@@ -1002,6 +1054,7 @@ export function App({ config }: AppProps) {
       if (event.type === 'done') finish();
     };
 
+    markRunStart();
     const attachedChips = chips;
     const excluded = new Set(excludedKinds);
     const includeSelection = Boolean(selected) && !excluded.has('selection');
@@ -1046,6 +1099,8 @@ export function App({ config }: AppProps) {
         ...(screenshotChip?.thumbnail ? { screenshotDataUrl: screenshotChip.thumbnail } : {}),
         consoleErrors: autoAttach.consoleErrors && !excluded.has('console'),
         failedRequests: autoAttach.failedRequests && !excluded.has('network'),
+        pinnedErrors,
+        pinnedRequests,
       });
       if (settled) return;
       const accepted = await workspace.request({
@@ -1098,6 +1153,7 @@ export function App({ config }: AppProps) {
         bottomOpen={bottomOpen}
         bottomTab={bottomTab}
         diffCount={diffCount}
+        errorCount={errorCount}
         chatUnread={chatUnread}
         status={pillStatus}
         compact={compact}
@@ -1110,6 +1166,7 @@ export function App({ config }: AppProps) {
         onSelectReview={() => openSide('diffs')}
         onSelectTerminal={() => openBottom('terminal')}
         onSelectTests={() => openBottom('tests')}
+        onSelectConsole={() => openBottom('console')}
       />
       {sideOpen ? (
         <SideDock
@@ -1155,7 +1212,13 @@ export function App({ config }: AppProps) {
               onModelChange={setModel}
               onModeChange={(next) => setMode(next === 'ask' ? 'ask' : 'agent')}
               onRemoveChip={(chip: ContextChip) => {
-                setExcludedKinds((current) => (current.includes(chip.kind) ? current : [...current, chip.kind]));
+                setPinnedChips((current) => current.filter((item) => item.id !== chip.id));
+                if (chip.id.startsWith('fix:')) {
+                  setPinnedErrors([]);
+                  setPinnedRequests([]);
+                } else {
+                  setExcludedKinds((current) => (current.includes(chip.kind) ? current : [...current, chip.kind]));
+                }
                 if (chip.kind === 'selection') {
                   elementRef.current = null;
                   selectedLocRef.current = null;
@@ -1207,6 +1270,9 @@ export function App({ config }: AppProps) {
           ) : null}
           {bottomOpen && bottomTab === 'tests' ? (
             <TestRunner workspace={workspace} projectName={config.projectName} />
+          ) : null}
+          {bottomOpen && bottomTab === 'console' ? (
+            <ConsolePanel workspace={workspace} onFix={fixWithAi} />
           ) : null}
         </BottomDock>
       ) : null}

@@ -37,7 +37,7 @@ export function Diagnostics() {
             }, 0);
           }}
         >
-          Throw error
+          Throw
         </button>
       </div>
     </section>

@@ -74,6 +74,18 @@ export function TerminalIcon(props: IconProps): JSX.Element {
   );
 }
 
+export function ConsoleIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect width="20" height="16" x="2" y="4" rx="2" />
+      <path d="M6 8h.01" />
+      <path d="M10 8h8" />
+      <path d="M6 12h.01" />
+      <path d="M10 12h8" />
+    </Icon>
+  );
+}
+
 export function FlaskConicalIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

@@ -24,6 +24,7 @@ export interface BottomDockProps {
 const TABS: Array<{ id: BottomTab; label: string }> = [
   { id: 'terminal', label: 'Terminal' },
   { id: 'tests', label: 'Tests' },
+  { id: 'console', label: 'Console' },
 ];
 
 export function BottomDock({
@@ -38,8 +39,9 @@ export function BottomDock({
   onClose,
   children,
 }: BottomDockProps) {
-  const closeAction = tab === 'terminal' ? 'close-terminal' : 'close-tests';
-  const closeLabel = tab === 'terminal' ? 'Close terminal' : 'Close tests';
+  const closeAction = `close-${tab}`;
+  const closeLabel =
+    tab === 'terminal' ? 'Close terminal' : tab === 'tests' ? 'Close tests' : 'Close console';
   return (
     <aside
       className={`bottom-dock${sheet ? ' sheet' : ''}${!sheet && sideOffset > 0 ? ' with-side' : ''}`}

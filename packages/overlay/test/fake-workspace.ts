@@ -118,6 +118,8 @@ function defaultReply(message: WorkspaceClientMessage, summary: GitDiffSummary):
       };
     case 'files.search':
       return { type: 'files.search.result', requestId: message.requestId, files: [] };
+    case 'editor.open':
+      return { type: 'editor.open.result', requestId: message.requestId, file: message.file };
     case 'thread.list':
       return { type: 'thread.list.result', requestId: message.requestId, threads: [] };
     case 'thread.get':

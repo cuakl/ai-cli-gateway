@@ -1,4 +1,5 @@
 import type { FailedNetworkRequest, FrontendError, SelectedElement } from '@aidev/protocol';
+import type { ConsoleEntry } from '../../context/entries.js';
 import { selectionChipLabel } from '../../inspector/locator.js';
 import type { AutoAttachPrefs } from '../prefs.js';
 import { CONTEXT_MAX_AGE_MS } from '../../context/index.js';
@@ -95,6 +96,18 @@ export function composerSuggestions(input: {
     suggestions.push(`Fix the ${countLabel(input.consoleErrorCount, 'console error', 'console errors')}`);
   }
   return suggestions;
+}
+
+export function chipFromConsoleEntry(entry: ConsoleEntry): ContextChip {
+  const kind: ContextChipKind = entry.filter === 'vite' ? 'vite' : entry.filter === 'network' ? 'network' : 'console';
+  const label =
+    kind === 'vite' ? 'Vite error' : kind === 'network' ? 'Failed request' : previewText(entry.message).slice(0, 48);
+  return {
+    id: `fix:${entry.id}`,
+    kind,
+    label,
+    preview: previewText(entry.stack ?? entry.message),
+  };
 }
 
 function previewText(value: string): string {

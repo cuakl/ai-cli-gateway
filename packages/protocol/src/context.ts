@@ -22,7 +22,7 @@ export const SelectedElementSchema = z.object({
 export type SelectedElement = z.infer<typeof SelectedElementSchema>;
 
 export const FrontendErrorSchema = z.object({
-  type: z.enum(['runtime', 'unhandled_rejection', 'console_error']),
+  type: z.enum(['runtime', 'unhandled_rejection', 'console_error', 'vite']),
   message: z.string(),
   stack: z.string().optional(),
   timestamp: z.number(),
@@ -42,6 +42,8 @@ export const FailedNetworkRequestSchema = z.object({
   url: z.string(),
   status: z.number().int(),
   durationMs: z.number().nonnegative(),
+  method: z.string().optional(),
+  bodyPreview: z.string().optional(),
 });
 
 export type FailedNetworkRequest = z.infer<typeof FailedNetworkRequestSchema>;

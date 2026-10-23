@@ -103,6 +103,7 @@ async function exercise(page: Page, url: string): Promise<void> {
   await page.getByRole('heading', { name: 'Light for the long table.' }).waitFor();
   await page.getByRole('img', { name: 'Gateway connected' }).waitFor();
   await fillNote(page);
+  await exerciseThrowAndFix(page);
 
   await page.getByRole('button', { name: 'Inspect', exact: true }).click();
   await page.locator('#hero-btn').click();
@@ -159,6 +160,32 @@ async function exercise(page: Page, url: string): Promise<void> {
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
   await page.getByText('No changes yet').waitFor();
   await exerciseTerminal(page);
+}
+
+async function exerciseThrowAndFix(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Throw', exact: true }).click();
+  await page.waitForFunction(
+    () => {
+      const root = document.querySelector('ai-devtools')?.shadowRoot;
+      const badge = root?.querySelector('[data-action="error-badge"]');
+      const count = Number(badge?.getAttribute('data-count') ?? badge?.textContent ?? '0');
+      return count >= 1;
+    },
+    undefined,
+    { timeout: 10_000 },
+  );
+  await page.locator('[data-action="error-badge"]').click();
+  await page.locator('section[aria-label="Console"]').waitFor();
+  await shot(page, 'console');
+  await page.getByRole('button', { name: 'Fix with AI', exact: true }).first().click();
+  await page.getByLabel('Prompt').waitFor();
+  await page.waitForFunction(() => {
+    const root = document.querySelector('ai-devtools')?.shadowRoot;
+    const textarea = root?.querySelector('textarea');
+    const chip = root?.querySelector('[data-chip="console"], [data-chip="vite"]');
+    return textarea instanceof HTMLTextAreaElement && textarea.value === 'Fix this error' && Boolean(chip);
+  });
+  await shot(page, 'fix-with-ai');
 }
 
 async function fillNote(page: Page): Promise<void> {

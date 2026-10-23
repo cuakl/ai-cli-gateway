@@ -63,6 +63,9 @@ describe('design tokens', () => {
 
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
     assertIconButtons(shadow, ['close-tests']);
+
+    (shadow?.querySelector('[data-action="console"]') as HTMLButtonElement).click();
+    assertIconButtons(shadow, ['close-console']);
   });
 
   it('defaults data-theme to dark and honors config.theme', () => {

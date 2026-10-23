@@ -99,11 +99,20 @@ describe('command palette', () => {
     search.dispatchEvent(new Event('input', { bubbles: true }));
     expect(shadow?.querySelector('[data-command="terminal"]')?.getAttribute('aria-selected')).toBe('true');
     expect(shadow?.querySelector('[data-command="inspect"]')).toBeNull();
+    expect(shadow?.querySelector('[data-command="console"]')).toBeNull();
 
     search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     expect(shadow?.querySelector('[data-action="command-palette"]')).toBeNull();
     expect(shadow?.querySelector('.bottom-dock:not([hidden])')).toBeTruthy();
     expect(shadow?.querySelector('section[aria-label="Terminal"]')).toBeTruthy();
+
+    window.dispatchEvent(chord('k'));
+    const searchAgain = shadow?.querySelector('[data-action="palette-search"]') as HTMLInputElement;
+    searchAgain.value = 'Open console';
+    searchAgain.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(shadow?.querySelector('[data-command="console"]')?.getAttribute('aria-selected')).toBe('true');
+    searchAgain.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(shadow?.querySelector('section[aria-label="Console"]')).toBeTruthy();
   });
 
   it('closes the palette on Esc before docks', () => {

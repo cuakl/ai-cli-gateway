@@ -13,7 +13,7 @@ export const RESIZE_STEP = 16;
 
 export type PillCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type SideTab = 'chat' | 'diffs';
-export type BottomTab = 'terminal' | 'tests';
+export type BottomTab = 'terminal' | 'tests' | 'console';
 export type DockMode = 'push' | 'overlay';
 
 export function parseDockMode(value: unknown): DockMode | undefined {

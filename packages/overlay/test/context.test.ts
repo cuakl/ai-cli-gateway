@@ -74,20 +74,79 @@ describe('gatherContext', () => {
     expect(FrontendContextPayloadSchema.parse(payload)).toEqual(payload);
   });
 
+  it('records failed XHR with redacted query values and a 4xx body preview', async () => {
+    class FakeXHR {
+      static UNSENT = 0;
+      static OPENED = 1;
+      static HEADERS_RECEIVED = 2;
+      static LOADING = 3;
+      static DONE = 4;
+      readyState = FakeXHR.DONE;
+      status = 401;
+      responseText = '{"error":"nope"}';
+      method = '';
+      url = '';
+      private readonly listeners = new Map<string, Array<() => void>>();
+      open(method: string, url: string): void {
+        this.method = method;
+        this.url = url;
+      }
+      send(): void {
+        queueMicrotask(() => {
+          for (const listener of this.listeners.get('loadend') ?? []) listener();
+        });
+      }
+      addEventListener(type: string, listener: () => void): void {
+        const list = this.listeners.get(type) ?? [];
+        list.push(listener);
+        this.listeners.set(type, list);
+      }
+      getResponseHeader(name: string): string | null {
+        return name.toLowerCase() === 'content-type' ? 'application/json' : null;
+      }
+    }
+    const proto = FakeXHR.prototype as unknown as XMLHttpRequest;
+    Object.setPrototypeOf(proto, XMLHttpRequest.prototype);
+    vi.stubGlobal('XMLHttpRequest', FakeXHR);
+    installContextCollectors({ gatewayUrl: 'http://127.0.0.1:4100' });
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', 'https://api.test/login?token=super-secret');
+    xhr.send();
+    await vi.waitFor(() => expect(getFailedNetworkRequests().length).toBe(1));
+    expect(getFailedNetworkRequests()[0]).toMatchObject({
+      method: 'POST',
+      status: 401,
+      bodyPreview: '{"error":"nope"}',
+    });
+    expect(getFailedNetworkRequests()[0]?.url).toContain('token=REDACTED');
+    expect(getFailedNetworkRequests()[0]?.url).not.toContain('super-secret');
+  });
+
   it('records failed fetches and ignores the gateway origin', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('127.0.0.1:4100')) return new Response('down', { status: 500 });
-      return new Response('nope', { status: 503 });
+      return new Response('{"error":"nope"}', {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
     });
     vi.stubGlobal('fetch', fetchMock);
     installContextCollectors({ gatewayUrl: 'http://127.0.0.1:4100' });
 
-    await fetch('https://example.test/api');
+    await fetch('https://example.test/api?auth=abc123');
     await fetch('http://127.0.0.1:4100/health');
 
     expect(getFailedNetworkRequests()).toEqual([
-      expect.objectContaining({ url: 'https://example.test/api', status: 503, durationMs: expect.any(Number) }),
+      expect.objectContaining({
+        url: expect.stringContaining('auth=REDACTED'),
+        status: 503,
+        durationMs: expect.any(Number),
+        method: 'GET',
+        bodyPreview: '{"error":"nope"}',
+      }),
     ]);
+    expect(getFailedNetworkRequests()[0]?.url).not.toContain('abc123');
   });
 });
