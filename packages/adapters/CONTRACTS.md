@@ -28,6 +28,7 @@ Ask and plan mode use `--permission-mode plan` and `--allowedTools Read,Glob,Gre
 | `--append-system-prompt <prompt>` | yes | "Append a system prompt to the default system prompt." Passed for `systemPrompt`. |
 | `--resume <session id>` | yes | `-r, --resume [value]`: "Resume a conversation by session ID, or open interactive picker with optional search term." Passed for `providerSessionId`. |
 | `--no-session-persistence` | yes | "Disable session persistence - sessions will not be saved to disk and cannot be resumed (only works with --print)." Passed when `ephemeral` is true. |
+| `--json-schema <schema>` | yes | "JSON Schema for structured output." Passed when `jsonSchema` is set. The value is the schema as a JSON string. Verified in `claude --help` on 2026-10-23 (Claude Code 2.1.173). |
 
 Not passed:
 

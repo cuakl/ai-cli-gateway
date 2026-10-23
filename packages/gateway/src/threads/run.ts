@@ -48,9 +48,10 @@ export function runningRun(input: {
   attachments: ImageAttachment[];
   startedAt?: number;
   status?: Extract<Run['status'], 'queued' | 'running'>;
+  id?: string;
 }): Run {
   return RunSchema.parse({
-    id: newRunId(),
+    id: input.id ?? newRunId(),
     threadId: input.threadId,
     prompt: input.prompt,
     contextSummary: input.contextSummary,

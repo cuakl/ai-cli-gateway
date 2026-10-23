@@ -5,7 +5,7 @@ import { requirePrincipal } from '../auth/principal.js';
 import { HttpError, sendHttpError } from '../errors.js';
 import { cancelSession, sessionVisible, startExecution } from '../execute.js';
 import { readPromptRequest } from './prompt.js';
-import { formatSseEvent } from '../sse.js';
+import { formatSseEvent, sseHeaders } from '../sse.js';
 import type { ServerDeps } from '../types.js';
 
 const SessionParamsSchema = z.object({
@@ -138,17 +138,4 @@ function streamSession(
     if (event.type === 'done') sawDone = true;
   }
   if (sawDone) closeStream();
-}
-
-function sseHeaders(reply: FastifyReply): Record<string, string | number | string[]> {
-  const headers: Record<string, string | number | string[]> = {};
-  for (const [key, value] of Object.entries(reply.getHeaders())) {
-    if (value !== undefined) headers[key] = value;
-  }
-  delete headers['content-length'];
-  headers['content-type'] = 'text/event-stream';
-  headers['cache-control'] = 'no-cache';
-  headers.connection = 'keep-alive';
-  headers['x-accel-buffering'] = 'no';
-  return headers;
 }

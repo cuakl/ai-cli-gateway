@@ -38,6 +38,7 @@ const RunParamsSchema = z.object({
 
 export function threadVisible(principal: Principal, thread: Thread): boolean {
   if (principal.kind === 'machine') return true;
+  if (principal.kind !== 'browser') return false;
   return thread.projectId !== null && thread.projectId === principal.projectId;
 }
 

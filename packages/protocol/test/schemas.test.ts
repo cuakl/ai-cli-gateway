@@ -4,6 +4,8 @@ import {
   AidevConfigSchema,
   ContextSummarySchema,
   GatewayClientMessageSchema,
+  InferRequestSchema,
+  InferResponseSchema,
   ProjectRegisterRequestSchema,
   ProjectRegisterResponseSchema,
   ProjectSchema,
@@ -344,6 +346,40 @@ const samples: Sample[] = [
     schema: PromptRequestSchema,
     valid: { provider: 'cursor', cwd: '/work/app', prompt: 'Hi' },
     invalid: { provider: 'cursor', cwd: '/work/app', prompt: '' },
+  },
+  {
+    name: 'infer request',
+    schema: InferRequestSchema,
+    valid: {
+      provider: 'cursor',
+      model: 'gpt-5',
+      system: 'Be brief',
+      messages: [
+        { role: 'system', content: 'Stay in JSON' },
+        { role: 'user', content: 'Hi' },
+        { role: 'assistant', content: 'Hello' },
+        { role: 'user', content: 'Name a color' },
+      ],
+      jsonSchema: { type: 'object', properties: { name: { type: 'string' } } },
+      stream: false,
+      timeoutMs: 30_000,
+      keep: false,
+    },
+    invalid: { messages: [] },
+  },
+  {
+    name: 'infer response',
+    schema: InferResponseSchema,
+    valid: {
+      id: 'run_abc',
+      provider: 'cursor',
+      model: 'gpt-5',
+      text: 'pong',
+      durationMs: 12,
+      threadId: 'thr_abc',
+      object: { name: 'Lamp' },
+    },
+    invalid: { id: 'run_abc', provider: 'cursor', text: 'pong' },
   },
   {
     name: 'gateway client prompt',
@@ -780,7 +816,7 @@ describe('protocol schemas', () => {
     ).toBeNull();
   });
 
-  it('accepts mode, model, and providerSessionId on prompt options', () => {
+  it('accepts mode, model, providerSessionId, and jsonSchema on prompt options', () => {
     expect(
       PromptOptionsSchema.parse({
         prompt: 'Hi',
@@ -790,6 +826,7 @@ describe('protocol schemas', () => {
         providerSessionId: 'chat_1',
         systemPrompt: 'Be brief',
         ephemeral: true,
+        jsonSchema: { type: 'object' },
       }),
     ).toMatchObject({
       mode: 'plan',
@@ -797,12 +834,16 @@ describe('protocol schemas', () => {
       providerSessionId: 'chat_1',
       systemPrompt: 'Be brief',
       ephemeral: true,
+      jsonSchema: { type: 'object' },
     });
     expect(PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app' }).mode).toBeUndefined();
     expect(() => PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app', mode: 'edit' })).toThrow();
     expect(() =>
       PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app', providerSessionId: '' }),
     ).toThrow();
+    expect(InferRequestSchema.safeParse({ messages: [{ role: 'assistant', content: 'Hi' }] }).success).toBe(
+      false,
+    );
   });
 
   it('builds a session_info event through createStreamEvent', () => {

@@ -137,6 +137,47 @@ During `serve` the plugin does four things:
 
 The file watcher waits briefly for a write to finish. The first start creates `~/.aidev` (`AIDEV_HOME` overrides that directory), a mode `0600` machine token, and `config.json`. Register a repo with `aidev projects add <path>`, or set `GATEWAY_ROOT` to auto-register one root at startup. The Vite plugin registers the project it is serving and injects a project-scoped browser token. A prompt `cwd` must resolve inside a registered project. A symlink whose target leaves that project is rejected.
 
+## Use it as an LLM API
+
+`POST /api/v1/infer` runs a signed-in CLI in **ask** mode (read-only) inside a fresh `$AIDEV_HOME/scratch/<runId>` directory. That directory is empty and is not a git repo. It is deleted after the run unless `"keep": true`. Nothing in your project is edited. Use this from another app when you want a completion without setting up provider API keys.
+
+```bash
+curl -s http://127.0.0.1:4100/api/v1/infer \
+  -H "authorization: Bearer $(cat ~/.aidev/token)" \
+  -H 'content-type: application/json' \
+  -d '{
+    "messages": [
+      { "role": "user", "content": "Reply with exactly: pong" }
+    ]
+  }'
+```
+
+A successful body is `{ id, provider, model, text, durationMs, threadId }`. The run is stored as a thread with `source: "api"` and `keep: false` unless you pass `"keep": true`.
+
+### Auth
+
+The route accepts the **machine token** (`~/.aidev/token`) or a token listed in `~/.aidev/config.json` under `inferenceTokens`. Put a dedicated token in another project's `.env` and send it as `Authorization: Bearer`. A browser token from project registration is rejected with `403`. No token is `401`.
+
+`provider` defaults to `config.json` `defaultProvider`, then the first available verified CLI, preferring Cursor. `model` defaults to `defaultModel` when set.
+
+### Structured output
+
+Pass `jsonSchema` (a JSON Schema object). The gateway appends `Reply with only a JSON value matching this JSON Schema: …` to the system instructions. Claude also receives `--json-schema` when that CLI advertises it. The first JSON object or array in the reply is extracted (including from a fenced json code block), then validated with Ajv. One retry is sent with the validation errors. A second failure is `422`:
+
+```json
+{ "error": "invalid_structured_output", "raw": "…", "issues": [ ] }
+```
+
+On success the body includes `object` next to `text`.
+
+### Streaming
+
+`"stream": true` returns Server-Sent Events. Only assistant text is sent (`event: delta` with `{ "text" }`). Notices and tool events are omitted. The stream ends with `event: done` `{ id, text, durationMs }` or `event: error`.
+
+### Limitations
+
+Each call starts a CLI process. Cold start is typically **several seconds**, not tens of milliseconds. This is a local coding CLI, not a hosted inference API. Timeouts follow the gateway watchdog (5 minutes, or `timeoutMs`). Concurrent runs share `maxConcurrentRuns` (default 4); over the limit the reply is `429` with `Retry-After: 5`.
+
 ## Call the gateway directly
 
 The server listens on `127.0.0.1:4100` unless `HOST` and `PORT` say otherwise.
@@ -257,8 +298,8 @@ Failures before the process starts are HTTP errors. A CLI that exits non-zero af
 | Status | `error` | When |
 | --- | --- | --- |
 | 400 | `validation_error` | The JSON body does not match the schema. `issues` has the Zod details. |
-| 401 | `unauthorized` | No bearer token, or the token is not the machine token or a live browser token. |
-| 403 | `forbidden` | A browser token touched another project, or a WebSocket `Origin` is not registered. |
+| 401 | `unauthorized` | No bearer token, or the token is not the machine token, a live browser token, or (on `/api/v1/infer`) a token in `config.inferenceTokens`. |
+| 403 | `forbidden` | A browser token touched another project, a WebSocket `Origin` is not registered, a browser token was sent to `/api/v1/infer`, or an inference token was sent to a non-inference route. |
 | 400 | `path_escape` | `cwd` or a file resolves outside the caller's project roots, or `cwd` is not a directory. |
 | 400 | `invalid_cwd` | The directory disappeared between the check and process start. |
 | 409 | `session_exists` | That `sessionId` is already registered. |
@@ -266,6 +307,7 @@ Failures before the process starts are HTTP errors. A CLI that exits non-zero af
 | 429 | `too_many_runs` | `maxConcurrentRuns` live runs already. `Retry-After` is 5 seconds. |
 | 422 | `provider_unavailable` | The binary is missing, or the provider name is unknown. `setup` is a list of steps. |
 | 422 | `cli_auth_required` | The CLI exited and its output asked for login. `setup` lists the sign-in steps. |
+| 422 | `invalid_structured_output` | `/api/v1/infer` with `jsonSchema` did not produce valid JSON after one retry. `raw` is the last reply; `issues` are the Ajv errors. |
 | 504 | `timeout` | The watchdog fired. The process was sent `SIGTERM`, then `SIGKILL`. |
 
 A missing Antigravity CLI looks like this:
@@ -336,6 +378,7 @@ There is no API-key variable. Each CLI keeps its own login.
 
 - **Loopback.** The default bind is `127.0.0.1`. Set `HOST` only when you intend the port to be reachable from somewhere else.
 - **Machine token.** The first start writes `~/.aidev/token` (mode `0600`, 32 random bytes, base64url). Every `/api/v1/*` route and every WebSocket requires `Authorization: Bearer <token>` or `?token=`. `GET /health` stays open and returns only `{ status, version }`.
+- **Inference tokens.** `POST /api/v1/infer` also accepts a token listed in `config.json` `inferenceTokens`. Browser tokens are rejected on that route.
 - **Browser tokens.** `POST /api/v1/projects/register` (machine token) takes `{ root, origin }` and returns `{ projectId, browserToken }`. The browser token lives in memory, is scoped to that project, and is re-issued when the dev server registers again after a restart. Re-registering the same root keeps the project id and may add an origin.
 - **CORS.** `Access-Control-Allow-Origin` is set only for origins registered by a project (and the gateway's own origin after it binds). Any other `Origin`, including `https://evil.example`, gets no CORS header. Requests with no `Origin` (curl, Node) are allowed when the token is valid. A WebSocket upgrade with a non-allowlisted `Origin` is rejected.
 - **Project roots.** A machine token may use a `cwd` inside any registered project. A browser token may use only its own. Paths are realpath-checked, including symlinks. `GATEWAY_ROOT` only auto-registers that one root; it is not an implicit allow-all.

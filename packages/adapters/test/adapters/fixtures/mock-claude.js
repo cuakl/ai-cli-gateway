@@ -25,6 +25,7 @@ const VALUE_FLAGS = new Set([
   '--append-system-prompt',
   '--resume',
   '-r',
+  '--json-schema',
 ]);
 
 function fail(message) {

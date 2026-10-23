@@ -35,9 +35,10 @@ const READ_ONLY_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'] as const;
  * Agent mode, checked against Claude Code 2.1.173:
  * `claude -p "<prompt>" --output-format stream-json --verbose --include-partial-messages --permission-mode acceptEdits --allowedTools <list>`
  * Ask and plan use `--permission-mode plan` and `--allowedTools Read,Glob,Grep`.
- * `--model`, `--append-system-prompt`, `--resume`, and `--no-session-persistence`
- * are passed when those options are set. `--verbose` is required. Without it,
- * stream-json with `-p` exits immediately. `--include-partial-messages` emits
+ * `--model`, `--append-system-prompt`, `--resume`, `--json-schema`, and
+ * `--no-session-persistence` are passed when those options are set. `--verbose`
+ * is required. Without it, stream-json with `-p` exits immediately.
+ * `--include-partial-messages` emits
  * `stream_event` text deltas and then an `assistant` message with the same
  * text. Deltas are kept; the repeat is not. `--bare` is omitted so an existing
  * Claude Code login still works.
@@ -67,6 +68,7 @@ export class ClaudeAdapter extends BaseAdapter {
     }
     if (options.providerSessionId) args.push('--resume', options.providerSessionId);
     if (options.ephemeral === true) args.push('--no-session-persistence');
+    if (options.jsonSchema) args.push('--json-schema', JSON.stringify(options.jsonSchema));
     return args;
   }
 

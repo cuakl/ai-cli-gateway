@@ -12,7 +12,9 @@ export function registerStatusRoutes(app: FastifyInstance, deps: ServerDeps): vo
     const projects =
       principal.kind === 'machine'
         ? deps.projects.list()
-        : deps.projects.list().filter((project) => allowed.has(project.root));
+        : principal.kind === 'browser'
+          ? deps.projects.list().filter((project) => allowed.has(project.root))
+          : [];
     return {
       status: 'ok' as const,
       version: GATEWAY_VERSION,

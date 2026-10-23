@@ -28,6 +28,11 @@ export function registerAuthGuard(app: FastifyInstance, deps: ServerDeps): void 
     if (!requiresAuth(pathname)) return;
     const principal = deps.auth.authenticate(readRequestToken(request));
     if (!principal) return sendUnauthorized(reply);
+    if (isInferenceRoute(pathname)) {
+      if (principal.kind === 'browser') return sendForbidden(reply);
+    } else if (principal.kind === 'inference') {
+      return sendForbidden(reply);
+    }
     const projectWs = PROJECT_WS.exec(pathname);
     if (projectWs?.[1]) {
       const projectId = decodeURIComponent(projectWs[1]);
@@ -45,6 +50,11 @@ export function registerAuthGuard(app: FastifyInstance, deps: ServerDeps): void 
 
 function requiresAuth(pathname: string): boolean {
   return pathname === '/ws' || pathname.startsWith('/api/v1/') || pathname.startsWith('/v1/');
+}
+
+/** Machine token or `config.inferenceTokens`. Browser tokens are 403. */
+function isInferenceRoute(pathname: string): boolean {
+  return pathname === '/api/v1/infer' || pathname.startsWith('/v1/');
 }
 
 function isWebsocket(pathname: string, upgrade: string | undefined): boolean {

@@ -24,6 +24,12 @@ export const PromptOptionsSchema = z.object({
   model: z.string().min(1).optional(),
   /** Omitted means `agent`. `ask` and `plan` are read-only. */
   mode: RunModeSchema.optional(),
+  /**
+   * JSON Schema for structured output. Claude passes `--json-schema` when the
+   * adapter sets this field. Other providers ignore it; the gateway still
+   * asks for JSON in the system prompt and validates the reply.
+   */
+  jsonSchema: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type PromptOptions = z.infer<typeof PromptOptionsSchema>;

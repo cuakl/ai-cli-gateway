@@ -42,6 +42,23 @@ export { GatewayClientMessageSchema, GatewayServerMessageSchema } from './messag
 export type { GatewayClientMessage, GatewayServerMessage } from './messages.js';
 
 export {
+  InferDeltaSchema,
+  InferDoneSchema,
+  InferMessageRoleSchema,
+  InferMessageSchema,
+  InferRequestSchema,
+  InferResponseSchema,
+} from './inference.js';
+export type {
+  InferDelta,
+  InferDone,
+  InferMessage,
+  InferMessageRole,
+  InferRequest,
+  InferResponse,
+} from './inference.js';
+
+export {
   DEFAULT_PROCESS_TIMEOUT_MS,
   PromptOptionsSchema,
   PromptRequestSchema,

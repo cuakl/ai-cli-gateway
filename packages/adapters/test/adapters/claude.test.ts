@@ -81,6 +81,24 @@ describe('ClaudeAdapter', () => {
     expect(agent).toContain('--model');
     expect(agent).toContain('opus');
     expect(agent).not.toContain('--no-session-persistence');
+    expect(agent).not.toContain('--json-schema');
+  });
+
+  it('passes --json-schema when jsonSchema is set', () => {
+    const adapter = new ClaudeAdapter();
+    const schema = {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    };
+    const args = adapter.buildArgs({
+      prompt: 'invent a name',
+      cwd: '/repo',
+      mode: 'ask',
+      jsonSchema: schema,
+    });
+    expect(args).toContain('--json-schema');
+    expect(args[args.indexOf('--json-schema') + 1]).toBe(JSON.stringify(schema));
   });
 
   it('rejects unknown flags the way claude does', async () => {

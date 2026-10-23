@@ -10,6 +10,7 @@ import { ensureHome, readConfig, resolveAidevHome } from './home.js';
 import { ProjectRegistry } from './projects/registry.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerInferRoutes } from './routes/infer.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerPromptRoutes } from './routes/prompt.js';
 import { registerSessionRoutes } from './routes/sessions.js';
@@ -66,11 +67,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     runtime: options.runtime ?? createDefaultRuntime(),
     home,
     projects,
-    auth: new AuthService(ensured.token, projects),
+    auth: new AuthService(ensured.token, projects, config.inferenceTokens ?? []),
     threads: new FileThreadStore(home),
     runs: new ActiveRuns(),
     scheduler: new RunScheduler(config.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS),
     hub: new WorkspaceHub(),
+    config,
     bindHost: options.host ?? '127.0.0.1',
     ...(options.root ? { root: options.root } : {}),
   };
@@ -136,6 +138,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerStatusRoutes(app, deps);
   registerProjectRoutes(app, deps);
   registerPromptRoutes(app, deps);
+  registerInferRoutes(app, deps);
   registerSessionRoutes(app, deps);
   registerThreadRoutes(app, deps);
   registerWebSocketRoutes(app, deps);

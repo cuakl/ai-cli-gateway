@@ -56,6 +56,11 @@ export interface StartExecutionOptions {
   queue?: boolean;
   /** Slot already held by the caller (workspace acquire). Released when the run ends. */
   heldLease?: RunLease;
+  /**
+   * Skip project-root confinement. Inference runs in `$AIDEV_HOME/scratch/<runId>`,
+   * which is not a registered project.
+   */
+  skipConfine?: boolean;
 }
 
 export interface StartedExecution {
@@ -76,7 +81,7 @@ export async function startExecution(
   options: StartExecutionOptions = {},
 ): Promise<StartedExecution> {
   if (!principal) throw new HttpError(401, 'unauthorized', 'A bearer token is required');
-  const prompt = await confineRequest(deps, request, principal);
+  const prompt = options.skipConfine ? request : await confineRequest(deps, request, principal);
   const mode: RunMode = prompt.mode ?? 'agent';
   const project = projectForPath(deps.projects, prompt.cwd);
   const projectId = project?.id ?? null;
@@ -359,6 +364,7 @@ function toPromptOptions(request: PromptRequest, sessionId: string): PromptOptio
     ...(request.providerSessionId !== undefined ? { providerSessionId: request.providerSessionId } : {}),
     ...(request.model !== undefined ? { model: request.model } : {}),
     ...(request.mode !== undefined ? { mode: request.mode } : {}),
+    ...(request.jsonSchema !== undefined ? { jsonSchema: request.jsonSchema } : {}),
   };
 }
 
@@ -495,6 +501,7 @@ export function rootsFor(deps: ServerDeps, principal: Principal): string[] {
     const project = deps.projects.get(principal.projectId);
     return project ? [project.root] : [];
   }
+  if (principal.kind === 'inference') return [];
   return deps.projects.roots();
 }
 

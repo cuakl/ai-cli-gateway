@@ -4,6 +4,7 @@ import { tokensEqual, type ProjectRegistry } from '../projects/registry.js';
 
 export type Principal =
   | { kind: 'machine' }
+  | { kind: 'inference' }
   | { kind: 'browser'; projectId: string; allowRemoteShell: boolean };
 
 declare module 'fastify' {
@@ -16,11 +17,15 @@ export class AuthService {
   constructor(
     private readonly machineToken: string,
     private readonly projects: ProjectRegistry,
+    private readonly inferenceTokens: readonly string[] = [],
   ) {}
 
   authenticate(token: string | undefined): Principal | null {
     if (!token) return null;
     if (tokensEqual(token, this.machineToken)) return { kind: 'machine' };
+    for (const item of this.inferenceTokens) {
+      if (tokensEqual(token, item)) return { kind: 'inference' };
+    }
     const grant = this.projects.browserGrant(token);
     if (!grant) return null;
     return { kind: 'browser', projectId: grant.projectId, allowRemoteShell: grant.allowRemoteShell };
@@ -78,6 +83,7 @@ export function isLoopbackHost(host: string | undefined): boolean {
  */
 export function ptyPermitted(principal: Principal, bindHost: string): boolean {
   if (principal.kind === 'machine') return true;
+  if (principal.kind !== 'browser') return false;
   if (isLoopbackHost(bindHost)) return true;
   return principal.allowRemoteShell;
 }
