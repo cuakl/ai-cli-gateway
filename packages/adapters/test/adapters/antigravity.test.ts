@@ -45,14 +45,9 @@ describe('AntigravityAdapter', () => {
     ]);
   });
 
-  it('maps NDJSON events and falls back to chunks for plain text', () => {
-    expect(parseAntigravityLine('status: writing styles', 'sess-1')).toMatchObject([
-      { sessionId: 'sess-1', type: 'chunk', payload: { text: 'status: writing styles' } },
-    ]);
-    expect(parseAntigravityLine('{not-json', 'sess-1')[0]).toMatchObject({
-      type: 'chunk',
-      payload: { text: '{not-json' },
-    });
+  it('maps NDJSON events and ignores non-JSON stdout', () => {
+    expect(parseAntigravityLine('status: writing styles', 'sess-1')).toEqual([]);
+    expect(parseAntigravityLine('{not-json', 'sess-1')).toEqual([]);
 
     const tool = parseAntigravityLine(
       JSON.stringify({ type: 'tool_call', toolName: 'Edit', toolArgs: { file: 'src/A.tsx' } }),
@@ -71,7 +66,7 @@ describe('AntigravityAdapter', () => {
     ]);
   });
 
-  it('streams mock agy NDJSON in order, including a non-JSON line', async () => {
+  it('streams mock agy NDJSON in order and drops a non-JSON line', async () => {
     const cwd = await tempWorkspace('gateway-agy-');
     try {
       const adapter = createAdapter('antigravity', {
@@ -88,32 +83,35 @@ describe('AntigravityAdapter', () => {
         'init',
         'chunk',
         'chunk',
-        'chunk',
         'tool_call',
         'tool_result',
         'file_edit',
         'done',
-        'done',
       ]);
       expect(events.every((event) => event.sessionId === 'sess-agy')).toBe(true);
-      const chunks = events.filter((event) => event.type === 'chunk').map((event) => event.payload.text);
-      expect(chunks).toEqual([prompt, 'Hello ', 'world', 'status: writing styles']);
-      expect(result.summary).toBe(chunks.join(''));
+      const chunks = events.filter((event) => event.type === 'chunk');
+      expect(chunks.map((event) => event.payload.text)).toEqual([prompt, 'Hello ', 'world']);
+      expect(chunks.map((event) => event.payload.segment)).toEqual([0, 0, 0]);
+      expect(result.summary).toBe(chunks.map((event) => event.payload.text).join(''));
+      expect(result.summary).not.toContain('status: writing styles');
       expect(events[0]?.payload.text).toBe('antigravity session started');
       expect(events[2]?.payload.text).toBe('agy session ready');
-      expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({
+      const toolCall = events.find((event) => event.type === 'tool_call');
+      const toolResult = events.find((event) => event.type === 'tool_result');
+      expect(toolCall?.payload).toMatchObject({
         toolName: 'Edit',
         toolArgs: { old_string: 'blue', new_string: 'emerald' },
       });
-      expect(events.find((event) => event.type === 'tool_result')?.payload.toolOutput).toBe('edited Hero.tsx');
+      expect(toolCall?.payload.toolCallId).toEqual(toolResult?.payload.toolCallId);
+      expect(toolCall?.payload.toolCallId).toEqual(expect.any(String));
+      expect(toolResult?.payload.toolOutput).toBe('edited Hero.tsx');
       expect(events.find((event) => event.type === 'file_edit')?.payload.filePath).toBe('src/Hero.tsx');
-      expect(events.find((event) => event.type === 'done' && event.payload.costUsd === 0.01)?.payload).toMatchObject({
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+      expect(events.at(-1)?.payload).toMatchObject({
         durationMs: 42,
         costUsd: 0.01,
         text: 'button updated',
       });
-      expect(events.at(-1)?.type).toBe('done');
-      expect(events.at(-1)?.payload.costUsd).toBeUndefined();
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

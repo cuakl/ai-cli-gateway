@@ -1,11 +1,12 @@
 import { mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { CursorLineParser, parseCursorLine } from '../../src/adapters/cursor.js';
 import {
   cleanupCursorEphemeral,
   createAdapter,
   CursorAdapter,
+  logger,
   ProcessManager,
   type ManagedProcessOptions,
 } from '../../src/index.js';
@@ -38,12 +39,18 @@ describe('CursorAdapter', () => {
     expect(adapter.buildArgs({ ...base, yolo: false })).not.toContain('--yolo');
   });
 
-  it('maps JSON events, aggregate payloads, and plain text', () => {
-    expect(parseCursorLine('cursor status', 'sess')[0]).toMatchObject({
-      type: 'chunk',
-      payload: { text: 'cursor status' },
-    });
-    expect(parseCursorLine('{not-json', 'sess')[0]?.type).toBe('chunk');
+  it('maps JSON events and aggregate payloads, and logs non-JSON stdout', () => {
+    const debug = vi.spyOn(logger, 'debug');
+    try {
+      const noise = "cursor-retrieval: tracing to '/var/folders/xx/cursor_retrieval.log'";
+      expect(parseCursorLine(noise, 'sess')).toEqual([]);
+      expect(parseCursorLine('{not-json', 'sess')).toEqual([]);
+      expect(parseCursorLine('cursor status', 'sess')).toEqual([]);
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('cursor-retrieval'));
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('{not-json'));
+    } finally {
+      debug.mockRestore();
+    }
 
     const tool = parseCursorLine(
       JSON.stringify({ type: 'tool_call', name: 'Edit', arguments: { filePath: 'src/A.tsx' } }),
@@ -79,11 +86,13 @@ describe('CursorAdapter', () => {
       JSON.stringify({
         type: 'tool_call',
         subtype: 'completed',
+        call_id: 'call-hero',
         tool_call: { tool: { case: 'editToolCall', value: { args: { path: 'src/components/Hero.tsx' } } } },
       }),
       'sess',
     );
     expect(edit.map((event) => event.type)).toEqual(['tool_call', 'file_edit']);
+    expect(edit[0]?.payload.toolCallId).toBe('call-hero');
     expect(edit[1]?.payload.filePath).toBe('src/components/Hero.tsx');
     const finished = parseCursorLine(
       JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 120, result: 'Tinting it.' }),
@@ -108,6 +117,8 @@ describe('CursorAdapter', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.summary).toBe('Updated hero button');
+      expect(result.summary).not.toContain('cursor-retrieval');
+      expect(events.some((event) => JSON.stringify(event.payload).includes('cursor-retrieval'))).toBe(false);
       expect(events.map((event) => event.type)).toEqual([
         'init',
         'chunk',
@@ -116,15 +127,18 @@ describe('CursorAdapter', () => {
         'tool_call',
         'file_edit',
         'done',
-        'done',
+      ]);
+      expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0]);
+      expect(events.filter((event) => event.type === 'tool_call').map((event) => event.payload.toolCallId)).toEqual([
+        'call-hero',
+        'call-app',
       ]);
       expect(events.filter((event) => event.type === 'file_edit').map((event) => event.payload.filePath)).toEqual([
         'src/components/Hero.tsx',
         'src/App.tsx',
       ]);
-      expect(events.find((event) => event.type === 'done' && event.payload.durationMs === 120)?.payload).toEqual({
-        durationMs: 120,
-      });
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+      expect(events.at(-1)?.payload).toEqual({ durationMs: 120 });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

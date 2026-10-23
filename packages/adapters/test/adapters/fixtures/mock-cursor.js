@@ -24,6 +24,7 @@ if (separator === -1 || !args[separator + 1]) fail('expected the prompt after --
 if (!args.includes('--force') && !args.includes('--yolo')) fail('expected --force or --yolo');
 
 const lines = [
+  "cursor-retrieval: tracing to '/var/folders/xx/cursor_retrieval.log'",
   { type: 'system', subtype: 'init', session_id: 'sess' },
   { type: 'user', message: { role: 'user', content: [{ type: 'text', text: args[separator + 1] }] } },
   {
@@ -49,4 +50,7 @@ const lines = [
   { type: 'result', subtype: 'success', duration_ms: 120, result: 'Updated hero button' },
 ];
 
-for (const line of lines) process.stdout.write(`${JSON.stringify(line)}\n`);
+for (const line of lines) {
+  const text = typeof line === 'string' ? line : JSON.stringify(line);
+  process.stdout.write(`${text}\n`);
+}

@@ -9,6 +9,7 @@ import {
   isDoneType,
   isRecord,
   isToolCallType,
+  ignoreNonJsonStdout,
   parseJsonRecord,
   stringField,
   textChunk,
@@ -105,7 +106,7 @@ export class ClaudeLineParser {
 
 export function parseClaudeLine(line: string, sessionId: string): UnifiedStreamEvent[] {
   const record = parseJsonRecord(line);
-  if (!record) return [textChunk(sessionId, line)];
+  if (!record) return ignoreNonJsonStdout('claude', line);
   if (eventType(record) === 'stream_event') {
     return isRecord(record.event) ? eventsFromClaudeRecord(record.event, sessionId, line) : [];
   }

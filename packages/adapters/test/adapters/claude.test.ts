@@ -45,12 +45,9 @@ describe('ClaudeAdapter', () => {
     });
   });
 
-  it('maps Anthropic stream events and plain text', () => {
-    expect(parseClaudeLine('still thinking', 'sess')[0]).toMatchObject({
-      type: 'chunk',
-      payload: { text: 'still thinking' },
-    });
-    expect(parseClaudeLine('{not-json', 'sess')[0]?.type).toBe('chunk');
+  it('maps Anthropic stream events and ignores non-JSON stdout', () => {
+    expect(parseClaudeLine('still thinking', 'sess')).toEqual([]);
+    expect(parseClaudeLine('{not-json', 'sess')).toEqual([]);
 
     const delta = parseClaudeLine(JSON.stringify({ type: 'text_delta', text: 'Hello' }), 'sess');
     expect(delta).toMatchObject([{ type: 'chunk', payload: { text: 'Hello' } }]);
@@ -61,7 +58,7 @@ describe('ClaudeAdapter', () => {
         message: {
           content: [
             { type: 'text', text: 'Hi' },
-            { type: 'tool_use', name: 'Edit', input: { file_path: 'src/A.tsx' } },
+            { type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { file_path: 'src/A.tsx' } },
           ],
         },
       }),
@@ -70,6 +67,7 @@ describe('ClaudeAdapter', () => {
     expect(assistant.map((event) => event.type)).toEqual(['chunk', 'tool_call', 'file_edit']);
     expect(assistant[1]?.payload).toMatchObject({
       toolName: 'Edit',
+      toolCallId: 'toolu_1',
       toolArgs: { file_path: 'src/A.tsx' },
     });
 
@@ -137,13 +135,16 @@ describe('ClaudeAdapter', () => {
         'file_edit',
         'tool_result',
         'done',
-        'done',
       ]);
       expect(events.every((event) => event.sessionId === 'sess-claude')).toBe(true);
+      expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0, 0]);
       expect(events.find((event) => event.type === 'tool_call')?.payload.toolName).toBe('Edit');
+      expect(events.find((event) => event.type === 'tool_call')?.payload.toolCallId).toBe('toolu_edit');
       expect(events.find((event) => event.type === 'file_edit')?.payload.filePath).toBe('src/App.tsx');
       expect(events.find((event) => event.type === 'tool_result')?.payload.toolOutput).toBe('updated App.tsx');
-      expect(events.find((event) => event.type === 'done' && event.payload.costUsd === 0.02)?.payload).toMatchObject({
+      expect(events.find((event) => event.type === 'tool_result')?.payload.toolCallId).toBe('toolu_edit');
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+      expect(events.at(-1)?.payload).toMatchObject({
         durationMs: 80,
         costUsd: 0.02,
         text: 'Updated styles',

@@ -30,18 +30,17 @@ describe('CodexAdapter', () => {
     ]);
   });
 
-  it('maps JSONL events and plain text', () => {
-    expect(parseCodexLine('working', 'sess')[0]).toMatchObject({
-      type: 'chunk',
-      payload: { text: 'working' },
-    });
-    expect(parseCodexLine('{not-json', 'sess')[0]?.type).toBe('chunk');
+  it('maps JSONL events and ignores non-JSON stdout', () => {
+    expect(parseCodexLine('working', 'sess')).toEqual([]);
+    expect(parseCodexLine('{not-json', 'sess')).toEqual([]);
 
     const call = parseCodexLine(
-      JSON.stringify({ type: 'tool_call', toolName: 'shell', toolArgs: { cmd: 'ls' } }),
+      JSON.stringify({ type: 'tool_call', id: 'call_1', toolName: 'shell', toolArgs: { cmd: 'ls' } }),
       'sess',
     );
-    expect(call).toMatchObject([{ type: 'tool_call', payload: { toolName: 'shell', toolArgs: { cmd: 'ls' } } }]);
+    expect(call).toMatchObject([
+      { type: 'tool_call', payload: { toolName: 'shell', toolCallId: 'call_1', toolArgs: { cmd: 'ls' } } },
+    ]);
 
     const item = parseCodexLine(
       JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Renamed the header' } }),
@@ -72,16 +71,21 @@ describe('CodexAdapter', () => {
         'tool_result',
         'file_edit',
         'done',
-        'done',
       ]);
       expect(events.every((event) => event.sessionId === 'sess-codex')).toBe(true);
-      expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({
+      expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0]);
+      const toolCall = events.find((event) => event.type === 'tool_call');
+      const toolResult = events.find((event) => event.type === 'tool_result');
+      expect(toolCall?.payload).toMatchObject({
         toolName: 'command_execution',
         toolArgs: { command: 'ls src' },
       });
-      expect(events.find((event) => event.type === 'tool_result')?.payload.toolOutput).toBe('App.tsx');
+      expect(toolCall?.payload.toolCallId).toEqual(toolResult?.payload.toolCallId);
+      expect(toolCall?.payload.toolCallId).toEqual(expect.any(String));
+      expect(toolResult?.payload.toolOutput).toBe('App.tsx');
       expect(events.find((event) => event.type === 'file_edit')?.payload.filePath).toBe('src/Header.tsx');
-      expect(events.find((event) => event.type === 'done' && event.payload.costUsd === 0.004)?.payload).toMatchObject({
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+      expect(events.at(-1)?.payload).toMatchObject({
         durationMs: 55,
         costUsd: 0.004,
       });

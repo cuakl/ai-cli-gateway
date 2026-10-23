@@ -44,6 +44,7 @@ describe('BaseAdapter', () => {
     expect(result).toEqual({ exitCode: 0, summary: prompt });
     expect(events.map((event) => event.type)).toEqual(['init', 'chunk', 'done']);
     expect(events[0]?.payload.text).toBe('codex session started');
+    expect(events.find((event) => event.type === 'chunk')?.payload.segment).toBe(0);
     expect(events.every((event) => event.sessionId === 'sess-echo')).toBe(true);
     await expect(adapter.isAvailable()).resolves.toBe(true);
     await expect(adapter.getBinaryPath()).resolves.toMatch(/\/node$/);

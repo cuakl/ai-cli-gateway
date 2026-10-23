@@ -1,4 +1,5 @@
 import { createStreamEvent, type UnifiedStreamEvent } from '@aidev/protocol';
+import { logger } from '../utils/logger.js';
 
 const TEXT_TYPES = new Set([
   'text',
@@ -53,6 +54,46 @@ export function parseJsonRecord(line: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/** JSON-streaming CLIs sometimes print diagnostics. Those are not assistant text. */
+export function ignoreNonJsonStdout(provider: string, line: string): UnifiedStreamEvent[] {
+  const text = line.trim();
+  if (text) logger.debug(`${provider} ignored non-json stdout: ${text}`);
+  return [];
+}
+
+const TOOL_ID_TYPES = new Set([
+  'tool_use',
+  'tool_call',
+  'tool_result',
+  'function_call',
+  'function_call_output',
+  'command_execution',
+  'mcp_tool_call',
+]);
+
+export function extractToolCallId(record: Record<string, unknown>): string | undefined {
+  return readToolCallId(record, true);
+}
+
+function readToolCallId(record: Record<string, unknown>, nested: boolean): string | undefined {
+  const specific = stringField(
+    record,
+    'toolCallId',
+    'tool_call_id',
+    'toolUseId',
+    'tool_use_id',
+    'call_id',
+    'callId',
+  );
+  if (specific) return specific;
+  if (nested && isRecord(record.tool_call)) {
+    const fromTool = readToolCallId(record.tool_call, false);
+    if (fromTool) return fromTool;
+  }
+  if (TOOL_ID_TYPES.has(eventType(record))) return stringField(record, 'id');
+  return undefined;
 }
 
 export function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
@@ -211,7 +252,11 @@ export function fileEditEvents(record: Record<string, unknown>, sessionId: strin
 
 export function toolResultEvent(record: Record<string, unknown>, sessionId: string): UnifiedStreamEvent {
   const toolOutput = extractToolOutput(record);
-  return createStreamEvent(sessionId, 'tool_result', toolOutput !== undefined ? { toolOutput } : {});
+  const toolCallId = extractToolCallId(record);
+  return createStreamEvent(sessionId, 'tool_result', {
+    ...(toolCallId ? { toolCallId } : {}),
+    ...(toolOutput !== undefined ? { toolOutput } : {}),
+  });
 }
 
 export function eventsForToolCall(record: Record<string, unknown>, sessionId: string): UnifiedStreamEvent[] {
@@ -219,9 +264,11 @@ export function eventsForToolCall(record: Record<string, unknown>, sessionId: st
   if (!toolName) return [];
   const raw = record.toolArgs ?? record.args ?? record.input ?? record.arguments;
   const toolArgs = isRecord(raw) ? raw : undefined;
+  const toolCallId = extractToolCallId(record);
   const events: UnifiedStreamEvent[] = [
     createStreamEvent(sessionId, 'tool_call', {
       toolName,
+      ...(toolCallId ? { toolCallId } : {}),
       ...(toolArgs ? { toolArgs } : {}),
     }),
   ];

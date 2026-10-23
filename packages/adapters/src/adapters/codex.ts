@@ -13,6 +13,8 @@ import {
   isRecord,
   isTextType,
   isToolCallType,
+  extractToolCallId,
+  ignoreNonJsonStdout,
   isToolResultType,
   parseJsonRecord,
   stringField,
@@ -44,7 +46,7 @@ export class CodexAdapter extends BaseAdapter {
 
 export function parseCodexLine(line: string, sessionId: string): UnifiedStreamEvent[] {
   const record = parseJsonRecord(line);
-  if (!record) return [textChunk(sessionId, line)];
+  if (!record) return ignoreNonJsonStdout('codex', line);
 
   const type = eventType(record);
   if (type === 'error') return [errorEvent(record, sessionId, line)];
@@ -110,6 +112,7 @@ function codexItemEvents(
     itemType === 'function_call' ||
     itemType === 'mcp_tool_call'
   ) {
+    const toolCallId = extractToolCallId(item);
     if (phase === 'started') {
       const toolName = stringField(item, 'name', 'toolName') ?? itemType;
       const command = stringField(item, 'command');
@@ -124,12 +127,18 @@ function codexItemEvents(
       return [
         createStreamEvent(sessionId, 'tool_call', {
           toolName,
+          ...(toolCallId ? { toolCallId } : {}),
           ...(toolArgs ? { toolArgs } : {}),
         }),
       ];
     }
     const toolOutput = stringField(item, 'aggregated_output', 'output', 'stdout') ?? extractToolOutput(item);
-    return [createStreamEvent(sessionId, 'tool_result', toolOutput !== undefined ? { toolOutput } : {})];
+    return [
+      createStreamEvent(sessionId, 'tool_result', {
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(toolOutput !== undefined ? { toolOutput } : {}),
+      }),
+    ];
   }
 
   if (itemType === 'file_change' || itemType === 'file_edit' || itemType === 'file_changed') {

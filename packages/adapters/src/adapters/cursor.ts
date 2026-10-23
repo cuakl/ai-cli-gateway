@@ -12,7 +12,9 @@ import {
   eventType,
   eventsForToolCall,
   extractText,
+  extractToolCallId,
   fileEditEvents,
+  ignoreNonJsonStdout,
   isDoneType,
   isFileType,
   isRecord,
@@ -142,7 +144,7 @@ export function parseCursorLine(line: string, sessionId: string): UnifiedStreamE
   if (!record) {
     const text = stripAnsi(line).trim();
     if (!text || describeAuthFailure('cursor', text)) return [];
-    return [textChunk(sessionId, text)];
+    return ignoreNonJsonStdout('cursor', text);
   }
 
   const type = eventType(record);
@@ -190,9 +192,11 @@ function cursorToolEvents(record: Record<string, unknown>, sessionId: string): U
     return generic.length > 0 ? generic : [];
   }
   const args = located.args;
+  const toolCallId = extractToolCallId(record);
   const events: UnifiedStreamEvent[] = [
     createStreamEvent(sessionId, 'tool_call', {
       toolName: located.name,
+      ...(toolCallId ? { toolCallId } : {}),
       ...(args ? { toolArgs: args } : {}),
     }),
   ];

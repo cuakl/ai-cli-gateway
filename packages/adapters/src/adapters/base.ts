@@ -9,6 +9,7 @@ import {
 import { ProcessManager } from '../session/manager.js';
 import type { CLIAdapter, ExecuteResult } from '../types/adapter.js';
 import { BinaryNotFoundError, BinaryResolver } from '../utils/binary.js';
+import { RunStream } from './run-state.js';
 
 /**
  * Shared execution flow for CLI providers. Subclasses build argv and, when
@@ -62,6 +63,7 @@ export abstract class BaseAdapter implements CLIAdapter {
     const args = this.buildArgs(parsed);
     const env = await this.executionEnv();
     const chunks: string[] = [];
+    const run = new RunStream();
 
     onEvent(
       createStreamEvent(sessionId, 'init', {
@@ -80,10 +82,14 @@ export abstract class BaseAdapter implements CLIAdapter {
         ...(env ? { env } : {}),
         ...(parsed.timeoutMs !== undefined ? { timeoutMs: parsed.timeoutMs } : {}),
         onEvent: (event) => {
+          if (event.type === 'done') {
+            onEvent({ ...event, payload: run.finish(event.payload) });
+            return;
+          }
           if (event.type === 'chunk' && event.payload.text) chunks.push(event.payload.text);
           onEvent(event);
         },
-        parseStdoutLine: (line, id) => this.parseStdoutLine(line, id),
+        parseStdoutLine: (line, id) => run.accept(this.parseStdoutLine(line, id)),
         parseStderrLine: (line, id) => this.parseStderrLine(line, id),
       });
 

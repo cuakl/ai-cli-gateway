@@ -11,6 +11,7 @@ import {
   isFileType,
   isTextType,
   isToolCallType,
+  ignoreNonJsonStdout,
   isToolResultType,
   parseJsonRecord,
   stringField,
@@ -54,7 +55,7 @@ export class AntigravityAdapter extends BaseAdapter {
 
 export function parseAntigravityLine(line: string, sessionId: string): UnifiedStreamEvent[] {
   const record = parseJsonRecord(line);
-  if (!record) return [textChunk(sessionId, line)];
+  if (!record) return ignoreNonJsonStdout('antigravity', line);
 
   const type = eventType(record);
   if (type === 'error') return [errorEvent(record, sessionId, line)];
