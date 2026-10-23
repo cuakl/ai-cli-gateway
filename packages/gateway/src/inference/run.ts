@@ -364,10 +364,20 @@ function toResponse(
   };
 }
 
+/**
+ * Text before a tool call is the agent narrating its plan ("I'll read the
+ * image…"). The answer is the text of the last segment.
+ */
 export function collectAssistantText(events: readonly UnifiedStreamEvent[]): string {
+  let segment = -1;
   let text = '';
   for (const event of events) {
     if (!isAssistantChunk(event) || !event.payload.text) continue;
+    const current = event.payload.segment ?? 0;
+    if (current !== segment) {
+      segment = current;
+      text = '';
+    }
     text += event.payload.text;
   }
   return text;

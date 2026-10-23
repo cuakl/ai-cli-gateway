@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createStreamEvent } from '@aidev/protocol';
+import { collectAssistantText } from '../src/inference/run.js';
 import { extractJsonValue, checkStructuredOutput } from '../src/inference/structured.js';
 import { renderInferPrompt, schemaSystemInstruction } from '../src/inference/messages.js';
 
@@ -59,5 +61,24 @@ describe('renderInferPrompt', () => {
     expect(rendered.systemPrompt).toContain('Be brief');
     expect(rendered.systemPrompt).toContain('Stay terse.');
     expect(rendered.systemPrompt).toContain('Reply with only a JSON value matching this JSON Schema:');
+  });
+});
+
+describe('collectAssistantText', () => {
+  const chunk = (text: string, segment: number) =>
+    createStreamEvent('s1', 'chunk', { text, segment });
+
+  it('returns only the text after the last tool call', () => {
+    const events = [
+      chunk("I'll inspect the image.", 0),
+      createStreamEvent('s1', 'tool_call', { toolName: 'read', toolCallId: 't1' }),
+      chunk('Re', 1),
+      chunk('d', 1),
+    ];
+    expect(collectAssistantText(events)).toBe('Red');
+  });
+
+  it('ignores notices with segment -1', () => {
+    expect(collectAssistantText([chunk('Tree is dirty', -1), chunk('pong', 0)])).toBe('pong');
   });
 });
