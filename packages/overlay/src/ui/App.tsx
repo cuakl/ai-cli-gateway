@@ -440,13 +440,13 @@ export function App({ config }: AppProps) {
       if (hiddenRef.current) return;
       const host = overlayHost();
       if (isPaletteChord(event)) {
-        if (!eventInsideOverlay(event, host) && isEditableTarget(event.target)) return;
         event.preventDefault();
         event.stopPropagation();
         if (settingsOpenRef.current) setSettingsOpen(false);
         setPaletteOpen((value) => !value);
         return;
       }
+      if (!eventInsideOverlay(event, host) && isEditableTarget(event.target)) return;
       if (isInspectChord(event)) {
         event.preventDefault();
         setInspecting((value) => !value);
