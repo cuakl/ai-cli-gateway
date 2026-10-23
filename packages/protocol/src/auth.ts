@@ -33,6 +33,12 @@ export const AidevConfigSchema = z.object({
   defaultProvider: ProviderSchema.optional(),
   defaultModel: z.string().min(1).optional(),
   maxConcurrentRuns: z.number().int().positive().optional(),
+  /**
+   * Editor for "Open in editor". `'auto'` (default) uses `cursor`, then `code`,
+   * then `$VISUAL`/`$EDITOR`. `'cursor'` and `'code'` pass `-g file:line:col`.
+   * Any other string is a single command (no shell) invoked with the file path.
+   */
+  editor: z.string().min(1).optional(),
 });
 
 export type AidevConfig = z.infer<typeof AidevConfigSchema>;

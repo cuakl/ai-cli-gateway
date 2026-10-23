@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build, createServer, type ResolvedConfig, type ViteDevServer } from 'vite';
 import { afterAll, describe, expect, it } from 'vitest';
-import aiDevtools, { aiDevtools as namedPlugin } from '../src/index.js';
+import aiDevtools, { EARLY_ERROR_SCRIPT, aiDevtools as namedPlugin } from '../src/index.js';
 import { resolveOverlayBundle } from '../src/overlay-path.js';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -38,6 +38,16 @@ describe('aiDevtools', () => {
       '/index.html',
       '<!doctype html><html><head><title>Demo</title></head><body><div id="root"></div></body></html>',
     );
+    expect(Buffer.byteLength(EARLY_ERROR_SCRIPT, 'utf8')).toBeLessThan(1024);
+    const hook = namedPlugin().transformIndexHtml;
+    expect(hook && typeof hook === 'object' ? hook.order : undefined).toBe('pre');
+    const earlyAt = html.indexOf('data-ai-devtools="early"');
+    const configAt = html.indexOf('data-ai-devtools="config"');
+    const overlayAt = html.indexOf('/@ai-devtools/overlay.js');
+    expect(html).toContain('__AI_DEVTOOLS_EARLY__');
+    expect(earlyAt).toBeGreaterThan(html.indexOf('<head>'));
+    expect(earlyAt).toBeLessThan(configAt);
+    expect(earlyAt).toBeLessThan(overlayAt);
     expect(html).toMatch(
       /<head>[\s\S]*<script type="module" src="\/@ai-devtools\/overlay\.js"><\/script>[\s\S]*<\/head>/,
     );
@@ -114,9 +124,13 @@ describe('aiDevtools', () => {
       typeof transform === 'function'
         ? await transform.call({} as never, '<button />\n', path.join(packageRoot, 'src/App.tsx'))
         : null;
+    const htmlHandler =
+      html && typeof html === 'object' && 'handler' in html
+        ? html.handler
+        : html;
     const htmlResult =
-      typeof html === 'function'
-        ? await html.call({} as never, '<html><head></head><body></body></html>', {} as never)
+      typeof htmlHandler === 'function'
+        ? await htmlHandler.call({} as never, '<html><head></head><body></body></html>', {} as never)
         : undefined;
     expect(transformResult).toBeNull();
     expect(htmlResult).toBeUndefined();

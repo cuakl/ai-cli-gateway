@@ -8,6 +8,7 @@ import {
   InferRequestSchema,
   InferResponseSchema,
   OpenAIChatCompletionRequestSchema,
+  OpenEditorRequestSchema,
   ProjectRegisterRequestSchema,
   ProjectRegisterResponseSchema,
   ProjectSchema,
@@ -214,8 +215,15 @@ const samples: Sample[] = [
       defaultProvider: 'cursor',
       defaultModel: 'gpt-5',
       maxConcurrentRuns: 4,
+      editor: 'auto',
     },
     invalid: { port: 0 },
+  },
+  {
+    name: 'open editor request',
+    schema: OpenEditorRequestSchema,
+    valid: { file: 'src/components/Hero.tsx', line: 11, column: 4 },
+    invalid: { file: '' },
   },
   {
     name: 'legacy chunk',
@@ -608,6 +616,20 @@ const samples: Sample[] = [
     invalid: { type: 'commit.suggest' },
   },
   {
+    name: 'files.search',
+    schema: WorkspaceClientMessageSchema,
+    wire: 'client',
+    valid: { type: 'files.search', query: 'Hero', limit: 20 },
+    invalid: { type: 'files.search', query: 'Hero', limit: 51 },
+  },
+  {
+    name: 'editor.open',
+    schema: WorkspaceClientMessageSchema,
+    wire: 'client',
+    valid: { type: 'editor.open', file: 'src/Hero.tsx', line: 11, column: 4 },
+    invalid: { type: 'editor.open', file: '' },
+  },
+  {
     name: 'run.accepted',
     schema: WorkspaceServerMessageSchema,
     wire: 'server',
@@ -825,6 +847,20 @@ const samples: Sample[] = [
     invalid: { type: 'commit.suggest.result', message: '' },
   },
   {
+    name: 'files.search.result',
+    schema: WorkspaceServerMessageSchema,
+    wire: 'server',
+    valid: { type: 'files.search.result', files: ['src/Hero.tsx'] },
+    invalid: { type: 'files.search.result' },
+  },
+  {
+    name: 'editor.open.result',
+    schema: WorkspaceServerMessageSchema,
+    wire: 'server',
+    valid: { type: 'editor.open.result', file: 'src/Hero.tsx' },
+    invalid: { type: 'editor.open.result' },
+  },
+  {
     name: 'error',
     schema: WorkspaceServerMessageSchema,
     wire: 'server',
@@ -859,6 +895,11 @@ describe('protocol schemas', () => {
 
   it('accepts an empty config and null run fields', () => {
     expect(AidevConfigSchema.parse({})).toEqual({});
+    expect(AidevConfigSchema.parse({ editor: 'cursor' }).editor).toBe('cursor');
+    expect(AidevConfigSchema.safeParse({ editor: '' }).success).toBe(false);
+    const search = WorkspaceClientMessageSchema.parse({ type: 'files.search', query: 'Hero' });
+    expect(search.type).toBe('files.search');
+    if (search.type === 'files.search') expect(search.limit).toBeUndefined();
     const open = {
       ...run,
       contextSummary: null,

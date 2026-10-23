@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
-import type { Plugin, ViteDevServer } from 'vite';
+import type { HtmlTagDescriptor, Plugin, ViteDevServer } from 'vite';
 import { subscribeProjectActivity } from './activity-socket.js';
 import { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE } from './brand.js';
 import { DEFAULT_GATEWAY_URL, ensureGateway } from './companion.js';
+import { EARLY_ERROR_SCRIPT } from './early-errors.js';
 import { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 import { injectDataLoc } from './jsx-transform.js';
 import { overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
@@ -15,6 +16,7 @@ import { readMachineToken, registerProject, type RegisteredProject } from './reg
 export { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE };
 export { DEFAULT_GATEWAY_URL } from './companion.js';
 export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
+export { EARLY_ERROR_SCRIPT } from './early-errors.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
 
@@ -98,24 +100,36 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
       if (!devActive() || options.injectDataLoc === false) return null;
       return injectDataLoc(code, id, root);
     },
-    async transformIndexHtml(html) {
-      if (!devActive()) return undefined;
-      if (html.includes(publicPath)) return undefined;
-      const registered = await registerNow();
-      const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify(configFor(registered)).replace(/</g, '\\u003c')};`;
-      return [
-        {
-          tag: 'script',
-          attrs: { 'data-ai-devtools': 'config' },
-          children: configScript,
-          injectTo: 'head',
-        },
-        {
-          tag: 'script',
-          attrs: { type: 'module', src: publicPath },
-          injectTo: 'head',
-        },
-      ];
+    transformIndexHtml: {
+      order: 'pre',
+      async handler(html) {
+        if (!devActive()) return undefined;
+        const tags: HtmlTagDescriptor[] = [
+          {
+            tag: 'script',
+            attrs: { 'data-ai-devtools': 'early' },
+            children: EARLY_ERROR_SCRIPT,
+            injectTo: 'head-prepend',
+          },
+        ];
+        if (html.includes(publicPath)) return tags;
+        const registered = await registerNow();
+        const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify(configFor(registered)).replace(/</g, '\\u003c')};`;
+        tags.push(
+          {
+            tag: 'script',
+            attrs: { 'data-ai-devtools': 'config' },
+            children: configScript,
+            injectTo: 'head',
+          },
+          {
+            tag: 'script',
+            attrs: { type: 'module', src: publicPath },
+            injectTo: 'head',
+          },
+        );
+        return tags;
+      },
     },
     configureServer(server) {
       if (!devActive()) return;

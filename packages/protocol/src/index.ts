@@ -142,6 +142,7 @@ export type {
 export {
   GitLogEntrySchema,
   GitStatusSchema,
+  OpenEditorRequestSchema,
   TestCaseResultSchema,
   TestCaseStatusSchema,
   TestFileResultSchema,
@@ -155,6 +156,7 @@ export {
 export type {
   GitLogEntry,
   GitStatus,
+  OpenEditorRequest,
   TestCaseResult,
   TestCaseStatus,
   TestFileResult,

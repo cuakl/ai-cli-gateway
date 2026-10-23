@@ -55,7 +55,7 @@ The toolbar is a custom element, `<ai-devtools>`, rendered in an open shadow roo
 
 Click **Inspect**, then click an element. The click is captured before the page's own handlers, so selecting the hero button does not add the lamp to the cart. Press Escape to leave inspect mode without selecting.
 
-The chip names the React component and the source location. React Fiber `_debugSource` is preferred. Anything else uses the `data-loc="file:line:col"` attribute the Vite plugin stamps onto JSX.
+The chip names the React component and the source location. React Fiber `_debugSource` is preferred. Anything else uses the `data-loc="file:line:col"` attribute the Vite plugin stamps onto JSX. **Open in editor** on the chip goes through the gateway (not a `vscode://` link); see below.
 
 ![Chat open on the hero button, with a source chip and a prompt](images/lumen-inspect-chat.png)
 
@@ -322,6 +322,12 @@ curl -s "http://127.0.0.1:4100/api/v1/threads?projectId=proj_…&source=api&limi
 | `GET` | `/api/v1/threads/:id/events?runId=` | SSE. Replays stored `{ runId, event }` lines, follows the live run when it is still active, then closes. |
 
 The project WebSocket has the same operations: `thread.list`, `thread.get` (includes `events`), `thread.delete`, and `thread.keep`. Threads with `keep: false` older than `retentionDays` (default 7, from `config.json`) are removed on startup and every hour. Overlay threads start with `keep: true`.
+
+### Open in editor
+
+`POST /api/v1/projects/:projectId/open` takes `{ "file", "line?", "column?" }`. Use the machine token or that project's browser token. The same payload is the workspace message `editor.open`.
+
+`~/.aidev/config.json` `editor` (default `auto`) chooses the binary. `auto` runs `cursor -g file:line:col` when `cursor` is on `PATH`, else `code -g …`, else `$VISUAL` or `$EDITOR` with the file path only. Set `editor` to `cursor` or `code` to skip detection, or to any other command name/path (invoked with the file path, no shell). A path outside the project is `path_escape`. Nothing usable on `PATH` is `editor_unavailable`.
 
 ### WebSocket
 

@@ -192,6 +192,15 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
   withType('commit.suggest', {
     paths: z.array(z.string().min(1)),
   }),
+  withType('files.search', {
+    query: z.string(),
+    limit: z.number().int().positive().max(50).optional(),
+  }),
+  withType('editor.open', {
+    file: z.string().min(1),
+    line: z.number().int().nonnegative().optional(),
+    column: z.number().int().nonnegative().optional(),
+  }),
 ]);
 
 export type WorkspaceClientMessage = z.infer<typeof WorkspaceClientMessageSchema>;
@@ -292,6 +301,12 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
   withType('commit.suggest.result', {
     message: z.string().min(1),
   }),
+  withType('files.search.result', {
+    files: z.array(z.string()),
+  }),
+  withType('editor.open.result', {
+    file: z.string().min(1),
+  }),
   withType('error', {
     code: z.string().min(1),
     message: z.string(),
@@ -299,3 +314,12 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
 ]);
 
 export type WorkspaceServerMessage = z.infer<typeof WorkspaceServerMessageSchema>;
+
+/** Body of `POST /api/v1/projects/:projectId/open` and `editor.open`. */
+export const OpenEditorRequestSchema = z.object({
+  file: z.string().min(1),
+  line: z.number().int().nonnegative().optional(),
+  column: z.number().int().nonnegative().optional(),
+});
+
+export type OpenEditorRequest = z.infer<typeof OpenEditorRequestSchema>;

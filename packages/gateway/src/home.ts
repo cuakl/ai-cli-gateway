@@ -30,6 +30,7 @@ export function defaultConfig(): AidevConfig {
     inferenceTokens: [],
     retentionDays: 7,
     maxConcurrentRuns: 4,
+    editor: 'auto',
   };
 }
 

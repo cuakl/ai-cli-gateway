@@ -106,6 +106,14 @@ describe('gateway companion', () => {
     expect(warn).not.toHaveBeenCalled();
 
     const html = await transformHtml(harness.plugin);
+    expect(Array.isArray(html)).toBe(true);
+    const tags = html as { tag?: string; injectTo?: string; attrs?: Record<string, string>; children?: string }[];
+    expect(tags[0]).toMatchObject({
+      tag: 'script',
+      injectTo: 'head-prepend',
+      attrs: { 'data-ai-devtools': 'early' },
+    });
+    expect(tags[0]?.children).toContain('__AI_DEVTOOLS_EARLY__');
     const script = scriptText(html);
     expect(script).toContain('"projectId":"proj_1"');
     expect(script).toContain('"browserToken":');
@@ -284,16 +292,19 @@ function stubFetch(options: {
 
 async function transformHtml(plugin: ReturnType<typeof aiDevtools>): Promise<unknown> {
   const transform = plugin.transformIndexHtml;
-  if (typeof transform !== 'function') throw new Error('transformIndexHtml missing');
-  return transform.call({} as never, '<!doctype html><html><head></head><body></body></html>', {} as never);
+  const handler =
+    transform && typeof transform === 'object' && 'handler' in transform ? transform.handler : transform;
+  if (typeof handler !== 'function') throw new Error('transformIndexHtml missing');
+  return handler.call({} as never, '<!doctype html><html><head></head><body></body></html>', {} as never);
 }
 
 function scriptText(result: unknown): string {
   if (!Array.isArray(result)) throw new Error('expected HTML tag descriptors');
-  const script = result.find(
+  const scripts = result.filter(
     (tag) => tag && typeof tag === 'object' && 'children' in tag && typeof tag.children === 'string',
-  ) as { children?: string } | undefined;
-  return script?.children ?? '';
+  ) as { children: string }[];
+  const config = scripts.find((tag) => tag.children.includes('__AI_DEVTOOLS__='));
+  return config?.children ?? scripts[0]?.children ?? '';
 }
 
 function request(middlewares: Middleware[], url: string): Promise<{ status: number; body: string }> {

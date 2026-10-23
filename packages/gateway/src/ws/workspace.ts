@@ -40,6 +40,8 @@ import {
   revert,
   undoCommit,
 } from '../workspace/git-service.js';
+import { EditorUnavailableError, openInEditor } from '../workspace/editor.js';
+import { searchProjectFiles } from '../workspace/file-search.js';
 import { spawnPty, type PtySession } from '../workspace/pty-service.js';
 import { runTests } from '../workspace/test-service.js';
 
@@ -373,6 +375,30 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
             type: 'commit.suggest.result',
             ...(message.requestId ? { requestId: message.requestId } : {}),
             message: suggestion,
+          });
+          return;
+        }
+        case 'files.search': {
+          const files = await searchProjectFiles(project.root, message.query, message.limit);
+          reply({
+            type: 'files.search.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            files,
+          });
+          return;
+        }
+        case 'editor.open': {
+          const opened = await openInEditor({
+            root: project.root,
+            file: message.file,
+            editor: deps.config.editor ?? 'auto',
+            ...(message.line !== undefined ? { line: message.line } : {}),
+            ...(message.column !== undefined ? { column: message.column } : {}),
+          });
+          reply({
+            type: 'editor.open.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            file: opened.file,
           });
           return;
         }
@@ -717,6 +743,7 @@ function asFailure(error: unknown): { code: string; message: string } {
   if (error instanceof GitOpError) return { code: error.code, message: error.message };
   if (error instanceof ThreadStoreError) return { code: 'thread_store', message: error.message };
   if (error instanceof PathEscapeError) return { code: 'path_escape', message: error.message };
+  if (error instanceof EditorUnavailableError) return { code: 'editor_unavailable', message: error.message };
   const message = error instanceof Error ? error.message : 'Request failed';
   if (/escapes the project root|invalid path/i.test(message)) return { code: 'path_escape', message };
   return { code: 'git_error', message };
