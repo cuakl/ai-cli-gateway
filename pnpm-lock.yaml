@@ -24,15 +24,15 @@ importers:
         specifier: ^18.3.1 || ^19.0.0
         version: 19.3.1(react@19.3.1)
     devDependencies:
-      '@ai-devtools/vite-plugin':
+      '@aidev/gateway':
         specifier: workspace:*
-        version: link:../../packages/devtools-vite
-      '@gateway/server':
+        version: link:../../packages/gateway
+      '@aidev/protocol':
         specifier: workspace:*
-        version: link:../../packages/gateway-server
-      '@gateway/shared-types':
+        version: link:../../packages/protocol
+      '@aidev/vite':
         specifier: workspace:*
-        version: link:../../packages/shared-types
+        version: link:../../packages/vite
       '@testing-library/react':
         specifier: ^16.3.0
         version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -67,11 +67,67 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
 
-  packages/devtools-overlay:
+  packages/adapters:
     dependencies:
-      '@gateway/shared-types':
+      '@aidev/protocol':
         specifier: workspace:*
-        version: link:../shared-types
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.5
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
+
+  packages/gateway:
+    dependencies:
+      '@aidev/adapters':
+        specifier: workspace:*
+        version: link:../adapters
+      '@aidev/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@fastify/cors':
+        specifier: ^10.1.0
+        version: 10.1.0
+      '@fastify/websocket':
+        specifier: ^11.2.0
+        version: 11.3.4
+      fastify:
+        specifier: ^5.6.1
+        version: 5.12.7
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.5
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.2
+      tsx:
+        specifier: ^4.20.5
+        version: 4.23.15
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
+      ws:
+        specifier: ^8.18.3
+        version: 8.22.0
+
+  packages/overlay:
+    dependencies:
+      '@aidev/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@xterm/addon-fit':
         specifier: ^0.10.0
         version: 0.10.0(@xterm/xterm@5.5.0)
@@ -101,8 +157,33 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
 
-  packages/devtools-vite:
+  packages/protocol:
     dependencies:
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.0
+        version: 22.20.5
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
+
+  packages/vite:
+    dependencies:
+      '@aidev/adapters':
+        specifier: workspace:*
+        version: link:../adapters
+      '@aidev/overlay':
+        specifier: workspace:*
+        version: link:../overlay
+      '@aidev/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@babel/parser':
         specifier: ^7.28.0
         version: 7.29.9
@@ -112,15 +193,6 @@ importers:
       '@babel/types':
         specifier: ^7.28.0
         version: 7.29.8
-      '@devtools/overlay':
-        specifier: workspace:*
-        version: link:../devtools-overlay
-      '@gateway/core':
-        specifier: workspace:*
-        version: link:../gateway-core
-      '@gateway/shared-types':
-        specifier: workspace:*
-        version: link:../shared-types
       magic-string:
         specifier: ^0.30.17
         version: 0.30.21
@@ -158,75 +230,6 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
-
-  packages/gateway-core:
-    dependencies:
-      '@gateway/shared-types':
-        specifier: workspace:*
-        version: link:../shared-types
-    devDependencies:
-      '@types/node':
-        specifier: ^22.19.0
-        version: 22.20.5
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
-
-  packages/gateway-server:
-    dependencies:
-      '@fastify/cors':
-        specifier: ^10.1.0
-        version: 10.1.0
-      '@fastify/websocket':
-        specifier: ^11.2.0
-        version: 11.3.4
-      '@gateway/core':
-        specifier: workspace:*
-        version: link:../gateway-core
-      '@gateway/shared-types':
-        specifier: workspace:*
-        version: link:../shared-types
-      fastify:
-        specifier: ^5.6.1
-        version: 5.12.7
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^22.19.0
-        version: 22.20.5
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.2
-      tsx:
-        specifier: ^4.20.5
-        version: 4.23.15
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.7(@types/node@22.20.5)(happy-dom@17.6.3)(tsx@4.23.15)
-      ws:
-        specifier: ^8.18.3
-        version: 8.22.0
-
-  packages/shared-types:
-    dependencies:
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^22.19.0
-        version: 22.20.5
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
 
 packages:
 

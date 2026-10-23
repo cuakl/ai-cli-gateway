@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { buildServer } from '@gateway/server';
+import { buildServer } from '@aidev/gateway';
 import { chromium, type Browser, type Page } from 'playwright';
 import { createEditingRuntime } from './scripted-gateway.js';
 
@@ -151,7 +151,7 @@ async function stageDemo(): Promise<string> {
 
 const VITE_CONFIG = `import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { aiDevtools } from '@ai-devtools/vite-plugin';
+import { aiDevtools } from '@aidev/vite';
 
 export default defineConfig({
   cacheDir: '.vite-cache',

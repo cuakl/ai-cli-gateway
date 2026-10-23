@@ -10,16 +10,16 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "e2e": "pnpm -w exec turbo run build --filter=@gateway/server --filter=@ai-devtools/vite-plugin && tsx e2e/loop.ts"
+    "e2e": "pnpm -w exec turbo run build --filter=@aidev/gateway --filter=@aidev/vite && tsx e2e/loop.ts"
   },
   "dependencies": {
     "react": "^18.3.1 || ^19.0.0",
     "react-dom": "^18.3.1 || ^19.0.0"
   },
   "devDependencies": {
-    "@ai-devtools/vite-plugin": "workspace:*",
-    "@gateway/server": "workspace:*",
-    "@gateway/shared-types": "workspace:*",
+    "@aidev/vite": "workspace:*",
+    "@aidev/gateway": "workspace:*",
+    "@aidev/protocol": "workspace:*",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.19.0",
     "@types/react": "^19.0.0",

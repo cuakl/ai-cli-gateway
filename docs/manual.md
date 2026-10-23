@@ -22,7 +22,7 @@ From the repository root, in two terminals:
 ```bash
 pnpm install
 pnpm build
-pnpm --filter @gateway/server dev
+pnpm --filter @aidev/gateway dev
 ```
 
 ```bash
@@ -108,12 +108,12 @@ Starting another run aborts the one in progress.
 
 ## Add the overlay to a Vite app
 
-Install the workspace package, or depend on `@ai-devtools/vite-plugin` from this repo, and register it:
+Install the workspace package, or depend on `@aidev/vite` from this repo, and register it:
 
 ```ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { aiDevtools } from '@ai-devtools/vite-plugin';
+import { aiDevtools } from '@aidev/vite';
 
 export default defineConfig({
   plugins: [react(), aiDevtools()],
@@ -123,7 +123,7 @@ export default defineConfig({
 During `serve` the plugin does four things:
 
 1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__`: the Vite WebSocket token, the gateway URL, the project root used as `cwd`, and the `name` from `package.json` when it has one.
-2. Serves the overlay bundle from `@devtools/overlay`.
+2. Serves the overlay bundle from `@aidev/overlay`.
 3. Writes `data-loc` onto JSX elements that do not already have one. The column is Babel's 0-based column.
 4. Handles git diff, commit, revert, PTY, and test messages on Vite's HMR socket. Chat prompts are not in that list. The overlay calls the gateway itself. The socket still accepts `ai-devtools:prompt`, but the toolbar does not send it.
 
@@ -276,18 +276,18 @@ Each adapter turns that CLI's JSON or NDJSON into the same event types. Text bec
 
 | Variable | Used by | Default | Purpose |
 | --- | --- | --- | --- |
-| `HOST` | `@gateway/server` | `127.0.0.1` | Bind address. Loopback keeps the gateway off the network. |
-| `PORT` | `@gateway/server` | `4100` | TCP port. |
-| `GATEWAY_ROOT` | `@gateway/server` | Git toplevel of the server process, or its current directory | Prompt `cwd` and file paths must stay inside this directory. |
+| `HOST` | `@aidev/gateway` | `127.0.0.1` | Bind address. Loopback keeps the gateway off the network. |
+| `PORT` | `@aidev/gateway` | `4100` | TCP port. |
+| `GATEWAY_ROOT` | `@aidev/gateway` | Git toplevel of the server process, or its current directory | Prompt `cwd` and file paths must stay inside this directory. |
 | `GATEWAY_URL` | Vite plugin, example client | `http://127.0.0.1:4100` | Gateway origin. The plugin injects this into the page. |
-| `GATEWAY_LOG_LEVEL` | `@gateway/core` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. Tests force `silent`. |
-| `GATEWAY_PROVIDER` | example client | first detected CLI, preferring `antigravity` | Provider for `pnpm --filter @gateway/server client`. |
+| `GATEWAY_LOG_LEVEL` | `@aidev/adapters` | `info` | `debug`, `info`, `warn`, `error`, or `silent`. Tests force `silent`. |
+| `GATEWAY_PROVIDER` | example client | first detected CLI, preferring `antigravity` | Provider for `pnpm --filter @aidev/gateway client`. |
 | `GATEWAY_CWD` | example client | the current directory | Working directory sent with that prompt. It still has to sit inside `GATEWAY_ROOT`. |
 | `SHELL` | terminal bridge | the process shell, or `bash` | Shell spawned for the in-browser terminal. |
 
 There is no API-key variable. Each CLI keeps its own login.
 
-`pnpm --filter @gateway/server dev` runs with the package directory as its working directory. The authorized root is still the git toplevel, so a prompt whose `cwd` is `apps/demo-react-app` is accepted. Set `GATEWAY_ROOT` when the server should be allowed to edit a different checkout.
+`pnpm --filter @aidev/gateway dev` runs with the package directory as its working directory. The authorized root is still the git toplevel, so a prompt whose `cwd` is `apps/demo-react-app` is accepted. Set `GATEWAY_ROOT` when the server should be allowed to edit a different checkout.
 
 ## Safeguards
 
@@ -302,7 +302,7 @@ There is no API-key variable. Each CLI keeps its own login.
 
 **The toolbar never appears.** The plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart `vite` after `pnpm build` so it picks up the overlay bundle. The page source should contain `/@ai-devtools/overlay.js`.
 
-**The status dot stays idle.** The gateway is not reachable at the injected URL. Start `@gateway/server`, or set `GATEWAY_URL`. Toolbar chat calls the gateway directly, so prompts do not run while it is down.
+**The status dot stays idle.** The gateway is not reachable at the injected URL. Start `@aidev/gateway`, or set `GATEWAY_URL`. Toolbar chat calls the gateway directly, so prompts do not run while it is down.
 
 **`provider_unavailable`.** The binary is not on `PATH` and not in the lookup paths above. The response `setup` array is the short version of what to install and which command to run once so the CLI can sign in.
 

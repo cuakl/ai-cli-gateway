@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI DevTools overlay demo</title>
+    <style>
+      :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: #f6f4ef; color: #1c1917; }
+      main { max-width: 880px; margin: 0 auto; padding: 48px 20px 120px; }
+      h1 { font-size: 48px; line-height: 1.05; margin-bottom: 12px; }
+      p { font-size: 18px; max-width: 46ch; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 24px 0; }
+      button, .card { font: inherit; }
+      #hero-button, .secondary {
+        border: 0; border-radius: 999px; padding: 12px 18px; cursor: pointer;
+      }
+      #hero-button { background: #1c1917; color: white; }
+      .secondary { background: white; border: 1px solid #d6d3d1; }
+      .card {
+        margin-top: 28px; padding: 20px; border-radius: 16px; background: white;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+      }
+      #boot-error { color: #9f1239; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p id="boot-error" hidden>
+        Overlay bundle missing. From the repo root run
+        <code>pnpm --filter @aidev/overlay build</code>
+        and reload this file.
+      </p>
+      <h1 id="title">Ship the hero.</h1>
+      <p data-loc="src/components/Hero.tsx:18:5">
+        Inspect any element. The overlay reads <code>data-loc</code> and React fiber debug info,
+        then sends that context to the gateway on <code>127.0.0.1:4100</code>.
+      </p>
+      <div class="row">
+        <button id="hero-button" data-loc="src/components/Hero.tsx:42:5">Get started</button>
+        <button class="secondary" id="warn-button" type="button">Log a warning</button>
+        <button class="secondary" id="throw-button" type="button">Throw an error</button>
+      </div>
+      <article class="card" id="pricing" data-loc="src/components/Pricing.tsx:12:3">
+        <h2>Pricing</h2>
+        <p>A card you can select when the layout is wrong.</p>
+      </article>
+    </main>
+    <script>
+      const hero = document.getElementById('hero-button');
+      hero.__reactFiber$demo = {
+        type: 'button',
+        memoizedProps: {},
+        return: {
+          type: { displayName: 'HeroButton' },
+          memoizedProps: { tone: 'primary', label: 'Get started' },
+          _debugSource: {
+            fileName: 'src/components/Hero.tsx',
+            lineNumber: 42,
+            columnNumber: 5
+          },
+          return: null
+        }
+      };
+      document.getElementById('warn-button').addEventListener('click', () => {
+        console.warn('hero spacing looks tight');
+      });
+      document.getElementById('throw-button').addEventListener('click', () => {
+        setTimeout(() => {
+          throw new Error('hero button failed to hydrate');
+        }, 0);
+      });
+    </script>
+    <script src="../dist/overlay.js"></script>
+    <script>
+      if (!customElements.get('ai-devtools')) {
+        document.getElementById('boot-error').hidden = false;
+      }
+    </script>
+  </body>
+</html>

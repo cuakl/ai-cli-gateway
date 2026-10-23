@@ -5,7 +5,7 @@ import {
   type PromptOptions,
   type ProviderType,
   type UnifiedStreamEvent,
-} from '@gateway/shared-types';
+} from '@aidev/protocol';
 
 const PROVIDERS = ['cursor', 'antigravity', 'claude', 'codex'] as const;
 

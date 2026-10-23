@@ -28,7 +28,7 @@ pnpm test
 Two terminals, from the repository root:
 
 ```bash
-pnpm --filter @gateway/server dev
+pnpm --filter @aidev/gateway dev
 ```
 
 ```bash
@@ -49,7 +49,7 @@ The full walkthrough, with the chat, diff, terminal, and test panels, is in the 
 You can also stream one prompt from the terminal while the gateway is running:
 
 ```bash
-pnpm --filter @gateway/server client -- "Add a hover transition to the hero button"
+pnpm --filter @aidev/gateway client -- "Add a hover transition to the hero button"
 ```
 
 ## Add it to a Vite app
@@ -57,7 +57,7 @@ pnpm --filter @gateway/server client -- "Add a hover transition to the hero butt
 ```ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { aiDevtools } from '@ai-devtools/vite-plugin';
+import { aiDevtools } from '@aidev/vite';
 
 export default defineConfig({
   plugins: [react(), aiDevtools()],
@@ -71,11 +71,11 @@ The plugin injects the overlay only while Vite is serving. Production builds lea
 ```
 ai-cli-gateway/
 ├── packages/
-│   ├── shared-types/       # @gateway/shared-types
-│   ├── gateway-core/       # @gateway/core
-│   ├── gateway-server/     # @gateway/server
-│   ├── devtools-overlay/   # @devtools/overlay
-│   └── devtools-vite/      # @ai-devtools/vite-plugin
+│   ├── protocol/           # @aidev/protocol
+│   ├── adapters/           # @aidev/adapters
+│   ├── gateway/            # @aidev/gateway
+│   ├── overlay/            # @aidev/overlay
+│   └── vite/               # @aidev/vite
 ├── apps/
 │   └── demo-react-app/     # Lumen, the storefront used to exercise the overlay
 └── examples/
@@ -84,11 +84,11 @@ ai-cli-gateway/
 
 | Package | What it does |
 | --- | --- |
-| `@gateway/shared-types` | Zod schemas for prompts, stream events, frontend context, and git diffs. |
-| `@gateway/core` | CLI adapters, binary lookup, and the process watchdog. |
-| `@gateway/server` | HTTP, Server-Sent Events, and WebSocket on `127.0.0.1:4100`. |
-| `@devtools/overlay` | Shadow-DOM toolbar: inspect, chat, diffs, terminal, tests. |
-| `@ai-devtools/vite-plugin` | Injects the overlay, stamps `data-loc` on JSX, and bridges the dev server. |
+| `@aidev/protocol` | Zod schemas for prompts, stream events, threads, runs, projects, and workspace messages. |
+| `@aidev/adapters` | CLI adapters, binary lookup, and the process watchdog. |
+| `@aidev/gateway` | HTTP, Server-Sent Events, and WebSocket on `127.0.0.1:4100`. |
+| `@aidev/overlay` | Shadow-DOM toolbar: inspect, chat, diffs, terminal, tests. |
+| `@aidev/vite` | Injects the overlay, stamps `data-loc` on JSX, and bridges the dev server. |
 
 ## Checks
 

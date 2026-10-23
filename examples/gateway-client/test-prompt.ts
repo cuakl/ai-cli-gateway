@@ -1,8 +1,8 @@
 /**
  * Stream a prompt through a running gateway and write text chunks to stdout.
  *
- *   pnpm --filter @gateway/server dev
- *   pnpm --filter @gateway/server client -- "Add a hover transition to the hero button"
+ *   pnpm --filter @aidev/gateway dev
+ *   pnpm --filter @aidev/gateway client -- "Add a hover transition to the hero button"
  *
  * GATEWAY_URL defaults to http://127.0.0.1:4100.
  * GATEWAY_CWD defaults to the current working directory.

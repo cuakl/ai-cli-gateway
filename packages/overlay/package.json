@@ -1,0 +1,37 @@
+{
+  "name": "@aidev/overlay",
+  "version": "0.0.1",
+  "description": "In-browser DevTools overlay: Shadow DOM host, element inspector, and gateway chat",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./overlay.js": "./dist/overlay.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @aidev/protocol build && vite build && vite build --mode iife && tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "pnpm --filter @aidev/protocol build && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aidev/protocol": "workspace:*",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "html-to-image": "^1.11.13",
+    "preact": "^10.26.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "happy-dom": "^17.6.3",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4"
+  }
+}
