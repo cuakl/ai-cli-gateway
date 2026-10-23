@@ -1,5 +1,5 @@
 import { h, options, render } from 'preact';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Markdown } from '../src/ui/chat/markdown.js';
 
 options.debounceRendering = (callback) => {
@@ -43,13 +43,18 @@ describe('Markdown', () => {
     }
   });
 
-  it('renders a fenced code block with language and a copy button', () => {
+  it('renders a fenced code block with language and a copy button', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const host = mount('```ts\nconst n = 1;\n```');
     expect(host.querySelector('[data-language="ts"]')).not.toBeNull();
     expect(host.querySelector('code')?.textContent).toBe('const n = 1;');
-    const copy = host.querySelector('[data-action="copy-code"]');
-    expect(copy?.tagName).toBe('BUTTON');
-    expect(copy?.textContent).toBe('Copy');
+    const copy = host.querySelector('[data-action="copy-code"]') as HTMLButtonElement;
+    expect(copy.tagName).toBe('BUTTON');
+    expect(copy.textContent).toBe('Copy');
+    copy.click();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenCalledWith('const n = 1;');
   });
 
   it('renders an unclosed fence as a code block', () => {

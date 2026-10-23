@@ -116,6 +116,13 @@ function defaultReply(message: WorkspaceClientMessage, summary: GitDiffSummary):
         threadId: 'thr_test',
         runId: 'run_test',
       };
+    case 'git.checkpoint.restore':
+      return {
+        type: 'git.checkpoint.restore.result',
+        requestId: message.requestId,
+        runId: message.runId,
+        files: [],
+      };
     default:
       return {
         type: 'error',

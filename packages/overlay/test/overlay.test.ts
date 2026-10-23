@@ -136,10 +136,11 @@ describe('initDevtools', () => {
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.textContent).toContain('Done editing'));
-    expect(shadow?.querySelector('.activity')?.textContent).toContain('Working tree is dirty');
-    const assistant = shadow?.querySelector('.message.assistant');
+    expect(shadow?.querySelector('.chat-notice')?.textContent).toContain('Working tree is dirty');
+    const assistant = shadow?.querySelector('.assistant-item');
     expect(assistant?.textContent).toContain('Done editing');
     expect(assistant?.textContent).not.toContain('Working tree is dirty');
+    expect(shadow?.querySelector('.messages')?.getAttribute('aria-live')).toBeNull();
   });
 
   it('opens the project socket from the config injected by the Vite plugin', () => {

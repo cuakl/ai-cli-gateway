@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { GitDiffSummary, ProviderType, SelectedElement, UnifiedStreamEvent } from '@aidev/protocol';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks';
+import type { GitDiffSummary, ProviderType, SelectedElement, StreamEventPayload, UnifiedStreamEvent } from '@aidev/protocol';
 import { gatherContext } from '../context/index.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
 import { BottomDock } from './BottomDock.js';
-import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
+import { ChatDrawer } from './ChatDrawer.js';
+import {
+  applyEvent,
+  emptyChatState,
+  startTurn,
+  type ChatState,
+  type NoticeItem,
+} from './chat/model.js';
 import { CommandPalette, type PaletteItem } from './CommandPalette.js';
 import { DiffViewer } from './DiffViewer.js';
 import {
@@ -114,7 +121,7 @@ export function App({ config }: AppProps) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const providerTouched = useRef(storedPrefs.provider != null);
   const [prompt, setPrompt] = useState(storedSession.prompt ?? '');
-  const [messages, setMessages] = useState<ChatLine[]>([]);
+  const [chat, dispatchChat] = useReducer(reduceChat, emptyChatState());
   const [sending, setSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(storedSession.threadId ?? null);
   const [summary, setSummary] = useState<GitDiffSummary | null>(null);
@@ -140,6 +147,8 @@ export function App({ config }: AppProps) {
   const settingsOpenRef = useRef(settingsOpen);
   const hiddenRef = useRef(hidden);
   const sendingRef = useRef(sending);
+  const chatRef = useRef(chat);
+  const undoConflictRunId = useRef<string | null>(null);
   sideOpenRef.current = sideOpen;
   sideTabRef.current = sideTab;
   inspectingRef.current = inspecting;
@@ -149,6 +158,7 @@ export function App({ config }: AppProps) {
   settingsOpenRef.current = settingsOpen;
   hiddenRef.current = hidden;
   sendingRef.current = sending;
+  chatRef.current = chat;
 
   const sheet = isSheetViewport(viewport.width);
   const compact = isCompactViewport(viewport.width);
@@ -271,11 +281,6 @@ export function App({ config }: AppProps) {
     if (inspecting) picker.start();
     else picker.stop();
   }, [inspecting]);
-
-  useLayoutEffect(() => {
-    const node = shellRef.current?.querySelector('.messages');
-    if (node instanceof HTMLElement) node.scrollTop = node.scrollHeight;
-  }, [messages, sideTab, sideOpen]);
 
   useLayoutEffect(() => {
     void refreshDiffs();
@@ -545,7 +550,7 @@ export function App({ config }: AppProps) {
   }
 
   function newChat(): void {
-    setMessages([]);
+    dispatchChat({ type: 'reset' });
     setPrompt('');
     setThreadId(null);
     setChatUnread(false);
@@ -597,36 +602,69 @@ export function App({ config }: AppProps) {
     }
   }
 
-  function pushStatus(text: string): void {
-    setMessages((current) => {
-      const last = current[current.length - 1];
-      if (last?.role === 'status' && last.text === text) return current;
-      return [...current, { id: createId(), role: 'status', text }];
-    });
+  function applyRunEvent(localRunId: string, gatewayRunId: string | undefined, event: UnifiedStreamEvent): void {
+    dispatchChat({ type: 'stream', localRunId, gatewayRunId, event });
   }
 
-  async function submit(): Promise<void> {
-    const text = prompt.trim();
+  async function undoRun(runId: string, force = false): Promise<void> {
+    try {
+      await workspace.request({
+        type: 'git.checkpoint.restore',
+        runId,
+        ...(force ? { force: true } : {}),
+      });
+      undoConflictRunId.current = null;
+      void refreshDiffs();
+    } catch (error) {
+      if (error instanceof WorkspaceError && error.code === 'conflict_newer_run' && !force) {
+        undoConflictRunId.current = runId;
+        dispatchChat({
+          type: 'notice',
+          notice: {
+            kind: 'notice',
+            id: createId(),
+            tone: 'warning',
+            text: error.message || 'A later run changed these files.',
+            actions: [{ label: 'Force undo', action: 'force-undo' }],
+          },
+        });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Undo failed';
+      pushToast({ text: message, tone: 'error' });
+    }
+  }
+
+  function handleNoticeAction(item: NoticeItem, action: string): void {
+    if (action === 'retry') {
+      const text = lastUserText(chatRef.current);
+      if (text) void submit(text);
+      return;
+    }
+    if (action === 'copy-command') {
+      const command = item.setup?.[0] ?? item.text;
+      void navigator.clipboard?.writeText(command).catch(() => undefined);
+      return;
+    }
+    if (action === 'force-undo') {
+      const runId = undoConflictRunId.current;
+      if (runId) void undoRun(runId, true);
+    }
+  }
+
+  async function submit(override?: string): Promise<void> {
+    const text = (override ?? prompt).trim();
     if (!text || sending) return;
-    const assistantId = createId();
     const requestId = createId();
-    let assistantText = '';
+    const localRunId = createId();
     let sawEdit = false;
     let editedCount = 0;
+    let sawError = false;
+    let sawDone = false;
     let stopped = false;
     let settled = false;
     let runId: string | undefined;
     const offs: Array<() => void> = [];
-    const writeAssistant = (value: string, isError = false): void => {
-      assistantText = value;
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantId
-            ? { ...item, text: value, pending: false, ...(isError ? { error: true } : {}) }
-            : item,
-        ),
-      );
-    };
 
     const cleanup = (): void => {
       for (const off of offs.splice(0)) off();
@@ -638,9 +676,16 @@ export function App({ config }: AppProps) {
       settled = true;
       cleanup();
       stopRun.current = null;
-      if (stopped) writeAssistant(assistantText || 'Stopped.');
-      else if (failure) writeAssistant(assistantText ? `${assistantText}\n${failure}` : failure, true);
-      else writeAssistant(assistantText || 'The agent finished without text output.');
+      if (!sawDone) {
+        if (stopped) {
+          applyRunEvent(localRunId, runId, localEvent('done', { status: 'cancelled' }));
+        } else if (failure) {
+          if (!sawError) applyRunEvent(localRunId, runId, localEvent('error', { error: failure }));
+          applyRunEvent(localRunId, runId, localEvent('done', { status: 'failed' }));
+        } else {
+          applyRunEvent(localRunId, runId, localEvent('done', {}));
+        }
+      }
       if (!(sideOpenRef.current && sideTabRef.current === 'chat')) setChatUnread(true);
       if (failure) {
         pushToast({ text: failure, tone: 'error' });
@@ -667,45 +712,36 @@ export function App({ config }: AppProps) {
       setSending(false);
     };
 
-    const applyEvent = (event: UnifiedStreamEvent): void => {
-      if (event.type === 'chunk' && event.payload.segment === -1) {
-        const noticeText = event.payload.text?.trim();
-        if (noticeText) pushStatus(noticeText);
-        return;
-      }
-      if (event.type === 'chunk' && event.payload.text) writeAssistant(assistantText + event.payload.text);
-      if (event.type === 'tool_call' && event.payload.toolName) {
-        const path = toolPath(event.payload.toolArgs) ?? event.payload.filePath;
-        pushStatus(activityLabel(event.payload.toolName, path));
-      }
+    const onStream = (event: UnifiedStreamEvent): void => {
+      if (settled) return;
       if (event.type === 'file_edit') {
         sawEdit = true;
         editedCount += 1;
       }
-      if (event.type === 'error') {
-        const messageText = event.payload.error ?? 'The agent reported an error';
-        writeAssistant(assistantText ? `${assistantText}\n${messageText}` : messageText, true);
+      if (event.type === 'files_changed') {
+        sawEdit = true;
+        const files = event.payload.files;
+        if (Array.isArray(files)) editedCount = Math.max(editedCount, files.length);
       }
+      if (event.type === 'error') sawError = true;
+      if (event.type === 'done') sawDone = true;
+      applyRunEvent(localRunId, runId, event);
       if (event.type === 'done') finish();
     };
 
     setPrompt('');
     setSending(true);
-    setMessages((current) => [
-      ...current,
-      { id: createId(), role: 'user', text },
-      { id: assistantId, role: 'assistant', text: '', pending: true },
-    ]);
+    dispatchChat({ type: 'start', input: { userText: text, chips: [], runId: localRunId } });
 
     offs.push(
       workspace.on('run.event', (message) => {
-        if (message.requestId !== requestId && message.runId !== runId) return;
-        applyEvent(message.event);
+        if (message.requestId !== requestId && message.runId !== runId && message.runId !== localRunId) return;
+        onStream(message.event);
       }),
     );
     offs.push(
       workspace.on('run.finished', (message) => {
-        if (message.requestId !== requestId && message.run.id !== runId) return;
+        if (message.requestId !== requestId && message.run.id !== runId && message.run.id !== localRunId) return;
         if (message.run.status === 'cancelled') stopped = true;
         if (message.run.error && !stopped) {
           finish(message.run.error.message);
@@ -741,6 +777,7 @@ export function App({ config }: AppProps) {
         attachments: [],
       });
       runId = accepted.runId;
+      dispatchChat({ type: 'retarget', from: localRunId, to: accepted.runId });
       if (accepted.threadId) setThreadId(accepted.threadId);
       if (stopped) workspace.send({ type: 'run.cancel', runId: accepted.runId });
     } catch (error) {
@@ -802,7 +839,7 @@ export function App({ config }: AppProps) {
               availability={availability}
               gatewayStatus={status}
               prompt={prompt}
-              messages={messages}
+              chat={chat}
               sending={sending}
               onPromptChange={setPrompt}
               onProviderChange={(next) => {
@@ -819,6 +856,15 @@ export function App({ config }: AppProps) {
                 void submit();
               }}
               onStop={() => stopRun.current?.()}
+              onReview={() => {
+                dismissToastsMatching('Edited');
+                openSide('diffs', true);
+              }}
+              onUndo={(runId) => {
+                void undoRun(runId);
+              }}
+              onKeepGoing={() => setPrompt('Keep going')}
+              onNoticeAction={handleNoticeAction}
             />
           ) : (
             <DiffViewer workspace={workspace} summary={summary} loading={diffLoading} error={diffError} />
@@ -916,35 +962,69 @@ function preferredProvider(listed: ProviderStatus[]): ProviderType {
   return listed.find((item) => item.available)?.provider ?? 'cursor';
 }
 
-function activityLabel(toolName: string, filePath?: string): string {
-  const key = toolName.toLowerCase();
-  const verb = key.includes('write')
-    ? 'Writing'
-    : key.includes('edit') || key.includes('patch') || key.includes('strreplace')
-      ? 'Editing'
-      : key.includes('shell') || key.includes('bash')
-        ? 'Running'
-        : key.includes('read')
-          ? 'Reading'
-          : key.includes('grep') || key.includes('search')
-            ? 'Searching'
-            : toolName;
-  if (!filePath) return verb;
-  const short = filePath.split('/').slice(-2).join('/');
-  return `${verb} ${short}`;
-}
-
-function toolPath(args: Record<string, unknown> | undefined): string | undefined {
-  if (!args) return undefined;
-  for (const key of ['path', 'filePath', 'file_path', 'target_file']) {
-    const value = args[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
-}
-
 function createId(): string {
   const cryptoApi = globalThis.crypto;
   if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
   return `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+type ChatAction =
+  | { type: 'reset' }
+  | { type: 'start'; input: Parameters<typeof startTurn>[1] }
+  | { type: 'stream'; localRunId: string; gatewayRunId?: string; event: UnifiedStreamEvent }
+  | { type: 'retarget'; from: string; to: string }
+  | { type: 'notice'; notice: NoticeItem };
+
+function reduceChat(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case 'reset':
+      return emptyChatState();
+    case 'start':
+      return startTurn(state, action.input);
+    case 'retarget':
+      return retargetRun(state, action.from, action.to);
+    case 'notice':
+      return { items: [...state.items, action.notice] };
+    case 'stream': {
+      const aligned =
+        action.gatewayRunId && action.gatewayRunId !== action.localRunId
+          ? retargetRun(state, action.localRunId, action.gatewayRunId)
+          : state;
+      return applyEvent(aligned, action.gatewayRunId ?? action.localRunId, action.event);
+    }
+    default:
+      return state;
+  }
+}
+
+function retargetRun(state: ChatState, from: string, to: string): ChatState {
+  if (from === to) return state;
+  let changed = false;
+  const items = state.items.map((item) => {
+    if (item.kind !== 'assistant' || item.runId !== from) return item;
+    changed = true;
+    return { ...item, runId: to };
+  });
+  return changed ? { items } : state;
+}
+
+function lastUserText(state: ChatState): string | undefined {
+  for (let index = state.items.length - 1; index >= 0; index -= 1) {
+    const item = state.items[index];
+    if (item?.kind === 'user') return item.text;
+  }
+  return undefined;
+}
+
+function localEvent(
+  type: UnifiedStreamEvent['type'],
+  payload: StreamEventPayload & { status?: string },
+): UnifiedStreamEvent {
+  return {
+    id: createId(),
+    sessionId: 'local',
+    type,
+    timestamp: Date.now(),
+    payload: payload as StreamEventPayload,
+  };
 }

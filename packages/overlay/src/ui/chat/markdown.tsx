@@ -97,7 +97,14 @@ function renderBlocks(source: string): ComponentChildren {
 function renderCode(key: number, language: string, code: string): JSX.Element {
   return (
     <div key={key} className="md-code" {...(language ? { 'data-language': language } : {})}>
-      <button type="button" data-action="copy-code">
+      <button
+        type="button"
+        data-action="copy-code"
+        aria-label="Copy code"
+        onClick={() => {
+          void navigator.clipboard?.writeText(code).catch(() => undefined);
+        }}
+      >
         Copy
       </button>
       <pre>

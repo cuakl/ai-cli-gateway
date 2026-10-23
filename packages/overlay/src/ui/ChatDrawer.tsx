@@ -1,16 +1,9 @@
 import type { ProviderType, SelectedElement } from '@aidev/protocol';
 import { selectionChipLabel } from '../inspector/locator.js';
-import { EmptyState } from './EmptyState.js';
-import { MessageSquareIcon, XIcon } from './icons.js';
+import { Transcript } from './chat/Transcript.js';
+import type { ChatState, NoticeItem } from './chat/model.js';
+import { XIcon } from './icons.js';
 import { sendShortcutHint } from './keyboard.js';
-
-export interface ChatLine {
-  id: string;
-  role: 'user' | 'assistant' | 'status';
-  text: string;
-  pending?: boolean;
-  error?: boolean;
-}
 
 export interface ChatDrawerProps {
   selected: SelectedElement | null;
@@ -18,7 +11,7 @@ export interface ChatDrawerProps {
   availability: Partial<Record<ProviderType, boolean>>;
   gatewayStatus: 'connected' | 'idle';
   prompt: string;
-  messages: ChatLine[];
+  chat: ChatState;
   sending: boolean;
   onPromptChange: (value: string) => void;
   onProviderChange: (provider: ProviderType) => void;
@@ -26,6 +19,10 @@ export interface ChatDrawerProps {
   onSuggest: (text: string) => void;
   onSubmit: () => void;
   onStop: () => void;
+  onReview: () => void;
+  onUndo: (runId: string) => void;
+  onKeepGoing: () => void;
+  onNoticeAction: (item: NoticeItem, action: string) => void;
 }
 
 const PROVIDERS: Array<{ id: ProviderType; label: string }> = [
@@ -43,7 +40,7 @@ export function ChatDrawer({
   availability,
   gatewayStatus,
   prompt,
-  messages,
+  chat,
   sending,
   onPromptChange,
   onProviderChange,
@@ -51,12 +48,15 @@ export function ChatDrawer({
   onSuggest,
   onSubmit,
   onStop,
+  onReview,
+  onUndo,
+  onKeepGoing,
+  onNoticeAction,
 }: ChatDrawerProps) {
   const providerLabel = PROVIDERS.find((item) => item.id === provider)?.label ?? provider;
   const known = Object.prototype.hasOwnProperty.call(availability, provider);
   const unavailable = known && availability[provider] === false;
   const unavailableReason = `${providerLabel} is not on PATH. Install it, sign in, and restart the gateway.`;
-  const conversation = messages.some((message) => message.role !== 'status');
 
   return (
     <section className="panel" aria-label="Chat">
@@ -77,30 +77,15 @@ export function ChatDrawer({
           </div>
         </div>
       ) : null}
-      <div className="messages" aria-live="polite">
-        {conversation ? (
-          messages.map((message) =>
-            message.role === 'status' ? (
-              <div key={message.id} className="activity">
-                {message.text}
-              </div>
-            ) : (
-              <div
-                key={message.id}
-                className={`message ${message.role}${message.pending ? ' pending' : ''}${message.error ? ' error' : ''}`}
-              >
-                {message.text || (message.pending ? 'Waiting for the gateway…' : '')}
-              </div>
-            ),
-          )
-        ) : (
-          <EmptyState
-            icon={<MessageSquareIcon size={24} />}
-            title={`Edit this page with ${providerLabel}`}
-            hint="Inspect an element, describe the change, and send. The agent edits the project and Vite reloads the page."
-          />
-        )}
-      </div>
+      <Transcript
+        items={chat.items}
+        emptyTitle={`Edit this page with ${providerLabel}`}
+        emptyHint="Inspect an element, describe the change, and send. The agent edits the project and Vite reloads the page."
+        onReview={onReview}
+        onUndo={onUndo}
+        onKeepGoing={onKeepGoing}
+        onNoticeAction={onNoticeAction}
+      />
       <div className="suggestions">
         {SUGGESTIONS.map((suggestion) => (
           <button key={suggestion} type="button" onClick={() => onSuggest(suggestion)}>
