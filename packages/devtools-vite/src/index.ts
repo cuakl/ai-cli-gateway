@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { createPromptRunner, DEFAULT_GATEWAY_URL, type PromptRunner } from './bridge.js';
@@ -26,6 +28,7 @@ export {
   PTY_RESIZE_EVENT,
   PTY_SPAWN_EVENT,
   RUN_TESTS_EVENT,
+  STOP_TESTS_EVENT,
   STREAM_EVENT,
   TEST_DONE_EVENT,
   TEST_OUTPUT_EVENT,
@@ -54,6 +57,7 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   let overlayFile = '';
   let wsToken = '';
   let wsBase = '/';
+  let projectName: string | undefined;
   const gatewayUrl = resolveGatewayUrl(options.gatewayUrl);
   const runner: PromptRunner = createPromptRunner({
     gatewayUrl,
@@ -91,6 +95,7 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
       overlayFile = resolveOverlayBundle();
       wsToken = config.webSocketToken;
       wsBase = config.base || '/';
+      projectName = readProjectName(root);
       if (devActive()) placeBeforeJsxCompilers(config.plugins as Plugin[]);
     },
     transform(code, id) {
@@ -105,6 +110,7 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
         wsBase,
         gatewayUrl,
         cwd: root,
+        ...(projectName ? { projectName } : {}),
       }).replace(/</g, '\\u003c')};`;
       return [
         {
@@ -136,6 +142,17 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
 }
 
 export default aiDevtools;
+
+function readProjectName(root: string): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { name?: unknown };
+    if (typeof raw.name !== 'string') return undefined;
+    const name = raw.name.trim();
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function resolveGatewayUrl(explicit: string | undefined): string {
   const value = explicit ?? process.env.GATEWAY_URL ?? DEFAULT_GATEWAY_URL;

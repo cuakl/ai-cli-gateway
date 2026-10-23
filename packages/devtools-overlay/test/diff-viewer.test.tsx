@@ -1,6 +1,7 @@
 import { h, options, render } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GitDiffSummary } from '@gateway/shared-types';
+import { OVERLAY_CSS } from '../src/styles.js';
 import { DiffViewer } from '../src/ui/DiffViewer.js';
 
 options.debounceRendering = (callback) => {
@@ -23,7 +24,7 @@ const summary: GitDiffSummary = {
           oldLines: 3,
           newStart: 10,
           newLines: 3,
-          content: ' const value = 1;\n-const color = "blue";\n+const color = "emerald";\n return value;',
+          content: ` const value = 1;\n-const color = "blue";\n+const color = "emerald";\n+${'x'.repeat(200)}\n return value;`,
         },
       ],
     },
@@ -73,6 +74,22 @@ describe('DiffViewer', () => {
     expect(host.textContent).toContain('emerald');
     expect(host.querySelector('.diff-add')?.textContent).toContain('emerald');
     expect(host.querySelector('.diff-del')?.textContent).toContain('blue');
+    expect(host.querySelector('.file-status')?.textContent).toBe('modified');
+    expect(host.querySelector('.file-sep')?.textContent).toBe('·');
+    expect(host.querySelector('.file-path')?.textContent).toBe('src/App.tsx');
+    const contextLine = host.querySelector('.diff-ctx');
+    const numbers = contextLine?.querySelectorAll('.ln');
+    expect(numbers).toHaveLength(2);
+    expect(numbers?.[0]?.textContent).toBe('10');
+    expect(numbers?.[1]?.textContent).toBe('10');
+    const longLine = [...(host.querySelectorAll('.diff-line code') ?? [])].find((node) => (node.textContent ?? '').includes('x'.repeat(200)));
+    expect(longLine?.textContent).toContain('x'.repeat(200));
+    expect(OVERLAY_CSS).toContain('grid-template-columns: 4ch 4ch max-content');
+    expect(OVERLAY_CSS).toContain('white-space: pre');
+    expect(OVERLAY_CSS).toContain('overflow-x: auto');
+    expect(OVERLAY_CSS).toMatch(/\.diff-layout \{[^}]*min-width: 0/s);
+    expect(OVERLAY_CSS).toMatch(/\.diff-view \{[^}]*min-width: 0/s);
+    expect(OVERLAY_CSS).toMatch(/\.hunk \{[^}]*min-width: 0/s);
 
     const hero = host.querySelector('[data-file="src/Hero.tsx"]') as HTMLButtonElement;
     hero.click();

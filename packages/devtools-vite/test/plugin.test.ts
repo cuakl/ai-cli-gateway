@@ -51,10 +51,12 @@ describe('aiDevtools', () => {
       wsToken?: string;
       gatewayUrl?: string;
       cwd?: string;
+      projectName?: string;
     };
     expect(config.wsToken).toEqual(expect.any(String));
     expect(config.gatewayUrl).toBe('http://127.0.0.1:4100');
     expect(config.cwd).toBe(server.config.root);
+    expect(config.projectName).toBe('@ai-devtools/vite-plugin');
 
     const transformed = await server.transformRequest('/test/fixtures/element.tsx');
     expect(transformed?.code).toContain('test/fixtures/element.tsx:3:4');

@@ -104,8 +104,8 @@ pnpm e2e
 - The gateway binds to loopback unless `HOST` is set.
 - Prompt `cwd` and file paths must stay inside `GATEWAY_ROOT` (the git root of the server process, unless you set the variable). The Vite bridge applies the same check to the project it is serving.
 - CLI arguments are an array passed to `spawn`. A hung process is stopped with `SIGTERM`, then `SIGKILL`. The default limit is 5 minutes.
-- The git bridge only stages paths inside the Vite project. A dirty or conflicted tree is reported in the chat before the agent edits.
-- While a prompt is running, full page reloads are collapsed into one refresh.
+- The git bridge only stages paths inside the Vite project.
+- Chat prompts go from the overlay to the gateway. Git, the terminal, and tests use the Vite socket. A dirty tree is not announced in that chat, and a chat run does not hold full page reloads.
 - A missing or signed-out CLI returns a structured error with setup steps.
 
 Environment variables, request examples, and the error codes are in the [manual](docs/manual.md).

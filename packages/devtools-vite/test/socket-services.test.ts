@@ -12,6 +12,7 @@ import {
   GIT_REVERT_EVENT,
   PROMPT_EVENT,
   RUN_TESTS_EVENT,
+  STOP_TESTS_EVENT,
   STREAM_EVENT,
   TEST_DONE_EVENT,
   TEST_OUTPUT_EVENT,
@@ -143,6 +144,33 @@ describe('devtools socket services', () => {
       { event: TEST_OUTPUT_EVENT, data: { requestId: 'tests-1', line: 'FAIL src/Hero.test.ts' } },
       { event: TEST_DONE_EVENT, data: { requestId: 'tests-1', ok: true, exitCode: 1, command: 'pnpm test' } },
     ]);
+  });
+
+  it('stops a running test', async () => {
+    let signal: AbortSignal | undefined;
+    const { listeners, sent } = bind({
+      runTests(_root, _onLine, next) {
+        signal = next;
+        return new Promise((resolve) => {
+          const finish = (): void => resolve({ exitCode: 130, command: 'pnpm test' });
+          if (next?.aborted) {
+            finish();
+            return;
+          }
+          next?.addEventListener('abort', finish, { once: true });
+        });
+      },
+    });
+    const client = recorder(sent);
+    const pending = listeners.get(RUN_TESTS_EVENT)?.({ requestId: 'tests-2' }, client);
+    await vi.waitFor(() => expect(signal).toBeInstanceOf(AbortSignal));
+    listeners.get(STOP_TESTS_EVENT)?.({ requestId: 'tests-2' }, client);
+    await pending;
+    expect(signal?.aborted).toBe(true);
+    expect(sent.at(-1)).toEqual({
+      event: TEST_DONE_EVENT,
+      data: { requestId: 'tests-2', ok: true, cancelled: true, exitCode: 130, command: 'pnpm test' },
+    });
   });
 });
 

@@ -166,6 +166,44 @@ describe('initDevtools', () => {
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(seen).toEqual(['/work/explicit']));
   });
+
+  it('disables send when the selected provider is not installed', async () => {
+    const host = initDevtools({
+      cwd: '/repo',
+      client: {
+        async checkHealth() {
+          return true;
+        },
+        async listProviders() {
+          return [
+            { provider: 'cursor', available: false },
+            { provider: 'claude', available: false },
+            { provider: 'antigravity', available: false },
+            { provider: 'codex', available: false },
+          ];
+        },
+        async streamPrompt() {
+          throw new Error('should not send');
+        },
+        cancel() {},
+      },
+    });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Make it emerald';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => {
+      const send = shadow?.querySelector('[data-action="send"]') as HTMLButtonElement;
+      expect(send.disabled).toBe(true);
+      expect(send.title).toContain('not on PATH');
+    });
+    const claude = shadow?.querySelector('option[value="claude"]') as HTMLOptionElement;
+    expect(claude.disabled).toBe(true);
+    expect(claude.textContent).toContain('not installed');
+    expect(shadow?.querySelector('.hint')?.textContent).toContain('not on PATH');
+    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+  });
 });
 
 function fakeClient(): GatewayBridge {

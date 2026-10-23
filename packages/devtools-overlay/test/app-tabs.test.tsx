@@ -68,20 +68,60 @@ describe('overlay tabs', () => {
     expect(shadow?.textContent).toContain('src/App.tsx');
 
     (shadow?.querySelector('[data-action="terminal"]') as HTMLButtonElement).click();
-    expect(shadow?.querySelector('[aria-label="Terminal"]')).toBeTruthy();
+    const terminal = shadow?.querySelector('[aria-label="Terminal"]') as HTMLElement;
+    expect(terminal).toBeTruthy();
+    expect(terminal.hidden).toBe(false);
     expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeNull();
     await vi.waitFor(() => expect(bridge.spawnPty).toHaveBeenCalled());
 
     (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Tests"]')).toBeTruthy();
+    expect(shadow?.querySelector('[aria-label="Tests"] .kicker')?.textContent).toBe('Tests');
+    expect(terminal.hidden).toBe(true);
+    expect(bridge.disposePty).not.toHaveBeenCalled();
     (shadow?.querySelector('[data-action="run-tests"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.querySelector('[data-status="passed"]')).toBeTruthy());
     expect(shadow?.textContent).toContain('1 passed');
 
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('textarea')).toBeTruthy();
+    (shadow?.querySelector('[data-action="terminal"]') as HTMLButtonElement).click();
+    expect(terminal.hidden).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.spawnPty).toHaveBeenCalledTimes(1);
+    expect(bridge.disposePty).not.toHaveBeenCalled();
+    (shadow?.querySelector('[data-action="close-terminal"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('[aria-label="Terminal"]')).toBeNull();
+    await vi.waitFor(() => expect(bridge.disposePty).toHaveBeenCalledWith('pty_test'));
+
+    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('textarea')).toBeTruthy();
     (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('textarea')).toBeNull();
+  });
+
+  it('shows the package name and stops a running suite', async () => {
+    let finish: ((result: { exitCode: number; command: string; cancelled?: boolean }) => void) | undefined;
+    const bridge = fakeBridge();
+    bridge.runTests = vi.fn(
+      () =>
+        new Promise<{ exitCode: number; command: string; cancelled?: boolean }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    bridge.stopTests = vi.fn(() => {
+      finish?.({ exitCode: 130, command: 'pnpm test', cancelled: true });
+    });
+    const host = initDevtools({ client: idleClient(), bridge, cwd: '/repo', projectName: 'demo-react-app' });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="tests"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('[aria-label="Tests"] .kicker')?.textContent).toBe('demo-react-app');
+    (shadow?.querySelector('[data-action="run-tests"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-action="stop-tests"]')).toBeTruthy());
+    (shadow?.querySelector('[data-action="stop-tests"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-status="stopped"]')).toBeTruthy());
+    expect(bridge.stopTests).toHaveBeenCalledOnce();
+    expect(shadow?.textContent).toContain('Stopped.');
   });
 
   it('asks for a diff review after the agent edits a file', async () => {
@@ -110,7 +150,11 @@ describe('overlay tabs', () => {
   });
 });
 
-function fakeBridge(): DevtoolsBridge & { spawnPty: ReturnType<typeof vi.fn> } {
+function fakeBridge(): DevtoolsBridge & {
+  spawnPty: ReturnType<typeof vi.fn>;
+  disposePty: ReturnType<typeof vi.fn>;
+  stopTests: ReturnType<typeof vi.fn>;
+} {
   return {
     async gitDiff() {
       return summary;
@@ -123,10 +167,11 @@ function fakeBridge(): DevtoolsBridge & { spawnPty: ReturnType<typeof vi.fn> } {
       onLine('1 passed');
       return { exitCode: 0, command: 'pnpm test' };
     },
+    stopTests: vi.fn(),
     spawnPty: vi.fn(async () => ({ sessionId: 'pty_test', fallback: false })),
     writePty() {},
     resizePty() {},
-    disposePty() {},
+    disposePty: vi.fn(),
     onPtyData() {
       return () => {};
     },

@@ -11,6 +11,7 @@ export const PTY_DISPOSE_EVENT = 'ai-devtools:pty-dispose';
 export const PTY_DATA_EVENT = 'ai-devtools:pty-data';
 export const PTY_EXIT_EVENT = 'ai-devtools:pty-exit';
 export const RUN_TESTS_EVENT = 'ai-devtools:run-tests';
+export const STOP_TESTS_EVENT = 'ai-devtools:stop-tests';
 export const TEST_OUTPUT_EVENT = 'ai-devtools:test-output';
 export const TEST_DONE_EVENT = 'ai-devtools:test-done';
 
@@ -23,6 +24,8 @@ export interface DevtoolsWindowConfig {
   gatewayUrl?: string;
   /** Absolute project root the agent should edit. */
   cwd?: string;
+  /** package.json name of the Vite project, when it has one. */
+  projectName?: string;
 }
 
 interface BridgeMessage {
@@ -64,6 +67,7 @@ class ViteHmrBridge implements DevtoolsBridge {
   private socket: WebSocket | null = null;
   private opening: Promise<WebSocket> | null = null;
   private requestSerial = 0;
+  private testRequestId: string | null = null;
   private readonly pending = new Map<
     string,
     { resolve: (data: BridgeMessage) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -88,8 +92,9 @@ class ViteHmrBridge implements DevtoolsBridge {
     await this.request(GIT_REVERT_EVENT, files ? { files } : {}, 60_000);
   }
 
-  async runTests(onLine: (line: string) => void): Promise<{ exitCode: number; command: string }> {
+  async runTests(onLine: (line: string) => void): Promise<{ exitCode: number; command: string; cancelled?: boolean }> {
     const requestId = this.nextRequestId();
+    this.testRequestId = requestId;
     const off = this.subscribe(TEST_OUTPUT_EVENT, (data) => {
       if (data.requestId === requestId && typeof data.line === 'string') onLine(data.line);
     });
@@ -98,10 +103,18 @@ class ViteHmrBridge implements DevtoolsBridge {
       return {
         exitCode: typeof data.exitCode === 'number' ? data.exitCode : 1,
         command: typeof data.command === 'string' ? data.command : '',
+        ...(data.cancelled === true ? { cancelled: true } : {}),
       };
     } finally {
       off();
+      if (this.testRequestId === requestId) this.testRequestId = null;
     }
+  }
+
+  stopTests(): void {
+    const requestId = this.testRequestId;
+    if (!requestId) return;
+    void this.send(STOP_TESTS_EVENT, { requestId });
   }
 
   async spawnPty(cols: number, rows: number): Promise<{ sessionId: string; fallback: boolean }> {
@@ -261,6 +274,7 @@ function unavailableBridge(): DevtoolsBridge {
     gitCommit: fail,
     gitRevert: fail,
     runTests: fail,
+    stopTests() {},
     spawnPty: fail,
     writePty() {},
     resizePty() {},

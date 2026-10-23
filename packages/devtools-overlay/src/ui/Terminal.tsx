@@ -5,10 +5,11 @@ import type { DevtoolsBridge } from '../types.js';
 
 export interface TerminalPanelProps {
   bridge: DevtoolsBridge;
+  hidden?: boolean;
   onClose: () => void;
 }
 
-export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
+export function TerminalPanel({ bridge, hidden = false, onClose }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,11 +47,15 @@ export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
         const fit = new FitAddon();
         term.loadAddon(fit);
         term.open(host);
-        try {
-          fit.fit();
-        } catch {
-          // The drawer may not have a size on the first frame.
-        }
+        const safeFit = (): void => {
+          if (host.clientWidth === 0 || host.clientHeight === 0) return;
+          try {
+            fit.fit();
+          } catch {
+            // The drawer may not have a size on the first frame.
+          }
+        };
+        safeFit();
 
         const offData = bridge.onPtyData((id, data) => {
           if (!sessionId) {
@@ -75,11 +80,7 @@ export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
 
         if (typeof ResizeObserver !== 'undefined') {
           const observer = new ResizeObserver(() => {
-            try {
-              fit.fit();
-            } catch {
-              // Ignore fit races while the panel is closing.
-            }
+            safeFit();
           });
           observer.observe(host);
           cleanups.push(() => observer.disconnect());
@@ -109,7 +110,7 @@ export function TerminalPanel({ bridge, onClose }: TerminalPanelProps) {
   }, [bridge]);
 
   return (
-    <section className="drawer wide" aria-label="Terminal">
+    <section className="drawer wide" aria-label="Terminal" hidden={hidden} aria-hidden={hidden}>
       <header className="drawer-header">
         <div className="header-copy">
           <p className="kicker">Project shell</p>

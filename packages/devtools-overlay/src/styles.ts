@@ -159,6 +159,7 @@ h2, p, span, label, code, pre { color: inherit; }
   flex-direction: column;
   width: min(420px, calc(100vw - 32px));
   height: min(640px, calc(100vh - 108px));
+  min-width: 0;
   pointer-events: auto;
   overflow: hidden;
   background: #14161d;
@@ -169,6 +170,8 @@ h2, p, span, label, code, pre { color: inherit; }
 }
 
 .drawer.wide { width: min(880px, calc(100vw - 32px)); }
+
+.drawer[hidden] { display: none; }
 
 .drawer-header,
 .composer,
@@ -346,9 +349,13 @@ h2, p, span, label, code, pre { color: inherit; }
 
 .hint {
   margin: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #f0c7a0;
   font-size: 12px;
   line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .composer textarea {
@@ -454,6 +461,7 @@ h2, p, span, label, code, pre { color: inherit; }
 .diff-layout {
   display: flex;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -502,12 +510,18 @@ h2, p, span, label, code, pre { color: inherit; }
 
 .diff-view {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   background: #0e1016;
   color: #e7edf8;
   font-family: ${OVERLAY_MONO};
   font-size: 12px;
   line-height: 1.55;
+}
+
+.diff-file {
+  min-width: 0;
 }
 
 .diff-file-head, .hunk-header {
@@ -534,6 +548,11 @@ h2, p, span, label, code, pre { color: inherit; }
   text-transform: uppercase;
 }
 
+.file-sep {
+  flex: none;
+  color: #8e98ab;
+}
+
 .file-path {
   min-width: 0;
   overflow: hidden;
@@ -541,16 +560,26 @@ h2, p, span, label, code, pre { color: inherit; }
   white-space: nowrap;
 }
 
+.hunk {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .diff-line {
   display: grid;
-  grid-template-columns: 3.4em 3.4em minmax(0, 1fr);
-  min-width: max-content;
+  grid-template-columns: 4ch 4ch max-content;
+  column-gap: 1.25ch;
+  width: max-content;
+  min-width: 100%;
+  white-space: pre;
 }
 
 .diff-line code {
   padding-right: 12px;
   color: #e7edf8;
   font-family: ${OVERLAY_MONO};
+  white-space: pre;
 }
 
 .diff-add { background: rgba(61, 214, 140, 0.16); }
@@ -560,8 +589,9 @@ h2, p, span, label, code, pre { color: inherit; }
 .diff-meta { color: #b7c0d0; }
 
 .ln {
-  padding: 0 8px;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  width: 4ch;
+  min-width: 4ch;
+  padding: 0;
   color: #8e98ab;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -611,6 +641,13 @@ h2, p, span, label, code, pre { color: inherit; }
 .badge[data-status="running"] { background: #3a3014; color: #f6d98a; }
 .badge[data-status="passed"] { background: #143528; color: #8ef0c0; }
 .badge[data-status="failed"] { background: #3f1717; color: #ffc1bc; }
+.badge[data-status="stopped"] { background: #2a3142; color: #e6ebf5; }
+
+.test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .test-log, .terminal-host { flex: 1; min-height: 0; }
 

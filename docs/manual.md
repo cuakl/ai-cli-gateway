@@ -4,15 +4,16 @@ This is the operator's guide for the gateway and the in-browser overlay: how to 
 
 ## The loop
 
-The overlay collects context in the page. The Vite plugin forwards the prompt to the gateway. The gateway runs one already-authenticated CLI in the project directory and normalizes its output into a single event stream. The CLI writes files on disk. Vite hot-reloads them. You commit from the drawer.
+The overlay collects context in the page and sends each chat prompt straight to the gateway. Git diffs, the terminal, and tests go over the Vite dev socket. The gateway runs one already-authenticated CLI in the project directory and normalizes its output into a single event stream. The CLI writes files on disk. Vite hot-reloads them. You commit from the drawer.
 
 ```
-browser overlay  →  Vite dev socket  →  gateway :4100  →  agent | agy | claude | codex
-        ↑                                        |
-        └──────── stream events, git, PTY, tests ┘
+browser overlay  →  gateway :4100  →  agent | agy | claude | codex
+        │                 ↑
+        │                 └── chat stream events
+        └─ Vite dev socket: git, terminal, tests
 ```
 
-If the gateway process is down, the Vite plugin runs the same adapter in-process through `@gateway/core` and still streams events to the drawer.
+Toolbar chat does not use the Vite socket. The plugin still listens for `ai-devtools:prompt`. On that path only, it can run the adapter in-process when the gateway is down, warn about a dirty git tree, and hold full page reloads. The overlay never sends prompts there, so none of those three apply to a chat from the toolbar.
 
 ## Run the Lumen demo
 
@@ -75,9 +76,9 @@ The prompt sent to the CLI includes:
 - recent failed network requests
 - a screenshot of the element, when the browser allows it
 
-Suggestions ("Fix layout", "Make responsive", "Add hover state") only fill the box. Send with the button or with Cmd/Ctrl+Enter. **Stop** cancels the running session.
+Suggestions ("Fix layout", "Make responsive", "Add hover state") only fill the box. Send with the button or with Cmd/Ctrl+Enter. **Stop** cancels the running session. Send stays disabled, with a tooltip, when the selected provider is known to be missing. Those options are disabled in the provider menu.
 
-A dirty or conflicted git tree is reported as a warning in the chat before the agent starts. The prompt still runs. After the agent edits files, a notice offers **Review diffs**.
+A dirty or conflicted git tree is not announced in the chat. After the agent edits files, a notice offers **Review diffs**.
 
 ### Diffs
 
@@ -95,11 +96,11 @@ The badge on the toolbar is the number of files in the summary.
 
 ![A shell session in the demo directory](images/lumen-terminal.png)
 
-Closing the panel disposes that session. The shell is the same user as the Vite process, so it can run git, pnpm, and the project scripts.
+Switching to Chat, Diffs, or Tests leaves the shell running. The close button on the terminal panel disposes that session. The shell is the same user as the Vite process, so it can run git, pnpm, and the project scripts.
 
 ### Tests
 
-**Tests** runs the project's `test` script. It walks up from the Vite root and prefers pnpm (`pnpm-lock.yaml` or `pnpm-workspace.yaml`), then npm, then yarn. With no script, a project that depends on Vitest runs `npx vitest run`. Output streams into the panel. The badge reads Passed or Failed from the exit code.
+**Tests** runs the project's `test` script. It walks up from the Vite root and prefers pnpm (`pnpm-lock.yaml` or `pnpm-workspace.yaml`), then npm, then yarn. With no script, a project that depends on Vitest runs `npx vitest run`. Output streams into the panel. The badge reads Passed or Failed from the exit code. **Stop** aborts the run in progress. The kicker above the title is the `name` from the Vite project's `package.json`, or **Tests** when that name is missing.
 
 ![The test runner after the Lumen suite passed](images/lumen-tests.png)
 
@@ -121,20 +122,20 @@ export default defineConfig({
 
 During `serve` the plugin does four things:
 
-1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__`: the Vite WebSocket token, the gateway URL, and the project root used as `cwd`.
+1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__`: the Vite WebSocket token, the gateway URL, the project root used as `cwd`, and the `name` from `package.json` when it has one.
 2. Serves the overlay bundle from `@devtools/overlay`.
 3. Writes `data-loc` onto JSX elements that do not already have one. The column is Babel's 0-based column.
-4. Handles overlay messages on Vite's HMR socket: prompts, cancel, git diff, commit, revert, PTY, and tests.
+4. Handles git diff, commit, revert, PTY, and test messages on Vite's HMR socket. Chat prompts are not in that list. The overlay calls the gateway itself. The socket still accepts `ai-devtools:prompt`, but the toolbar does not send it.
 
 `aiDevtools()` accepts:
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `gatewayUrl` | `GATEWAY_URL` or `http://127.0.0.1:4100` | Where prompts are forwarded. |
+| `gatewayUrl` | `GATEWAY_URL` or `http://127.0.0.1:4100` | Gateway origin injected into the page. Toolbar chat calls it directly. |
 | `enabled` | `true` while serving, `false` for builds | Turns injection and the socket bridge off. |
 | `injectDataLoc` | `true` | Turns the JSX source stamp off. |
 
-The file watcher waits briefly for a write to finish, and full page reloads are held until the current prompt settles, then sent once. Module hot updates still apply as files change.
+The file watcher waits briefly for a write to finish. The plugin can also hold Vite `full-reload` messages, but only while a prompt is running on the socket. Toolbar chat does not start that hold, so a chat run does not delay a full reload. Module hot updates still apply as files change.
 
 Start the gateway in the repo you want the CLI to edit, or set `GATEWAY_ROOT` to that repo. The overlay's `cwd` is the Vite root, and both the plugin and the gateway reject a path that resolves outside the authorized root, including a symlink whose target is outside it.
 
@@ -195,7 +196,7 @@ event: done
 data: {"id":"...","sessionId":"sess_01H...","type":"done","timestamp":1760990001000,"payload":{"durationMs":812}}
 ```
 
-`GET /api/v1/sessions/:id` returns the session record, including events already buffered. `DELETE /api/v1/sessions/:id` aborts a running session.
+`GET /api/v1/sessions/:id` returns the session record: `id`, `provider`, `cwd`, `status`, `createdAt`, `updatedAt`, and `exitCode` once the run has finished. It does not include events. Events are the SSE stream at `GET /api/v1/sessions/:id/stream`. `DELETE /api/v1/sessions/:id` aborts a running session.
 
 `ephemeral: true` asks the Cursor adapter to delete `.cursor/worktrees/<sessionId>` and `.cursor/sessions/<sessionId>` after the process exits. Other providers ignore it.
 
@@ -260,8 +261,10 @@ A missing Antigravity CLI looks like this:
 | --- | --- | --- |
 | `cursor` | `agent -p --output-format stream-json --stream-partial-output --trust --workspace <cwd> --force -- "<prompt>"` | `agent`, `cursor-agent`, then `~/.local/bin` and `~/.cursor/bin` |
 | `antigravity` | `agy --print "<prompt>" --output-format stream-json --workspace <cwd>` | `agy`, then `~/.local/bin` and `~/.antigravity/bin` |
-| `claude` | `claude --bare -p "<prompt>" --output-format stream-json --allowedTools <list> --permission-prompts none` | `claude`, then `~/.local/bin` and `~/.claude/local` |
+| `claude` | `claude -p "<prompt>" --output-format stream-json --verbose --include-partial-messages --permission-mode acceptEdits --allowedTools <list>` | `claude`, then `~/.local/bin` and `~/.claude/local` |
 | `codex` | `codex exec --jsonl --sandbox workspace-write "<prompt>"` | `codex`, then `~/.local/bin` and `~/.npm-global/bin` |
+
+Claude Code 2.1.173 rejects `stream-json` with `-p` unless `--verbose` is set. `--include-partial-messages` streams text deltas. `--permission-mode acceptEdits` lets the agent edit without a permission prompt. `--bare` is not passed: that flag skips OAuth and would require `ANTHROPIC_API_KEY`.
 
 When `CURSOR_AUTH_TOKEN` and `CURSOR_API_KEY` are unset, the Cursor adapter reads the signed-in IDE access token from Cursor's local state database and passes it to that child as `CURSOR_AUTH_TOKEN`. The gateway does not write the token to disk or include it in logs. `agent login` remains the fallback when the IDE has no session.
 
@@ -292,21 +295,19 @@ There is no API-key variable. Each CLI keeps its own login.
 - **Project root.** `cwd` and every file path are resolved, symlinks included, and rejected when they leave `GATEWAY_ROOT`. The Vite plugin does the same against the project it is serving, so a page cannot point a prompt at `/etc`.
 - **No shell.** `spawn` is called with `shell: false`. `which` is `execFile`, and command names that contain shell metacharacters are ignored.
 - **Watchdog.** The default timeout is 5 minutes (`timeoutMs` overrides it). On expiry the process group receives `SIGTERM`, then `SIGKILL` if it is still alive.
-- **Git scope.** Commit and discard only touch paths inside the Vite project. A conflicted or dirty tree produces a warning chunk before the agent runs.
-- **Reload debounce.** During a prompt, Vite `full-reload` messages are queued and delivered once, 250ms after the last one, when the prompt ends. The file watcher also waits for writes to settle.
+- **Git scope.** Commit and discard only touch paths inside the Vite project.
+- **Reload debounce.** The file watcher waits for writes to settle. Holding `full-reload` until a prompt ends is wired to the socket prompt listener. Toolbar chat does not use that listener, so it does not hold reloads.
 
 ## Troubleshooting
 
 **The toolbar never appears.** The plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart `vite` after `pnpm build` so it picks up the overlay bundle. The page source should contain `/@ai-devtools/overlay.js`.
 
-**The status dot stays idle.** The gateway is not reachable at the injected URL. Start `@gateway/server`, or set `GATEWAY_URL`. Prompts still run in-process when the server is down; health checks do not.
+**The status dot stays idle.** The gateway is not reachable at the injected URL. Start `@gateway/server`, or set `GATEWAY_URL`. Toolbar chat calls the gateway directly, so prompts do not run while it is down.
 
 **`provider_unavailable`.** The binary is not on `PATH` and not in the lookup paths above. The response `setup` array is the short version of what to install and which command to run once so the CLI can sign in.
 
 **`cli_auth_required`.** The process started and then asked for login. For Cursor, sign in to the Cursor app and retry, or run `agent login`. Other CLIs need their own sign-in in a normal terminal. The gateway does not store credentials.
 
 **`path_escape`.** `cwd` or a `files` entry resolved outside the authorized root. For the demo, `cwd` should be the `apps/demo-react-app` directory (the plugin injects this). For a server started outside a git checkout, set `GATEWAY_ROOT` to the checkout you want to allow.
-
-**The page reloads once at the end of a long edit.** That is the reload guard releasing a full reload after the prompt. Hot updates to modules still apply while the agent is writing.
 
 **Commit fails with "not a git repository".** The Vite root is not inside a work tree. Initialize git there, or run the app from a subdirectory of a repository. The Lumen end-to-end test copies the demo into a temporary repository for this reason.

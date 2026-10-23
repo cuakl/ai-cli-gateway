@@ -22,6 +22,7 @@ const REVIEW_NOTICE = 'The agent edited files. Review the diffs before committin
 export function App({ config }: AppProps) {
   const [inspecting, setInspecting] = useState(false);
   const [panel, setPanel] = useState<DevtoolsPanel | null>(null);
+  const [terminalMounted, setTerminalMounted] = useState(false);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [provider, setProvider] = useState<ProviderType>('cursor');
@@ -143,7 +144,13 @@ export function App({ config }: AppProps) {
   }
 
   function selectPanel(next: DevtoolsPanel): void {
+    if (next === 'terminal') setTerminalMounted(true);
     setPanel((current) => (current === next ? null : next));
+  }
+
+  function closeTerminal(): void {
+    setTerminalMounted(false);
+    setPanel((current) => (current === 'terminal' ? null : current));
   }
 
   async function submit(): Promise<void> {
@@ -248,7 +255,7 @@ export function App({ config }: AppProps) {
         onToggleInspect={() => setInspecting((value) => !value)}
         onSelectPanel={selectPanel}
       />
-      {panel ? (
+      {panel || terminalMounted ? (
         <div ref={drawerRef}>
           {panel === 'chat' ? (
             <ChatDrawer
@@ -293,8 +300,12 @@ export function App({ config }: AppProps) {
               onClose={() => setPanel(null)}
             />
           ) : null}
-          {panel === 'terminal' ? <TerminalPanel bridge={bridge} onClose={() => setPanel(null)} /> : null}
-          {panel === 'tests' ? <TestRunner bridge={bridge} onClose={() => setPanel(null)} /> : null}
+          {terminalMounted ? (
+            <TerminalPanel bridge={bridge} hidden={panel !== 'terminal'} onClose={closeTerminal} />
+          ) : null}
+          {panel === 'tests' ? (
+            <TestRunner bridge={bridge} projectName={config.projectName} onClose={() => setPanel(null)} />
+          ) : null}
         </div>
       ) : null}
     </div>

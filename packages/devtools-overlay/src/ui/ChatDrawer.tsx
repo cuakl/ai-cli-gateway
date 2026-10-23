@@ -54,6 +54,7 @@ export function ChatDrawer({
   const providerLabel = PROVIDERS.find((item) => item.id === provider)?.label ?? provider;
   const known = Object.prototype.hasOwnProperty.call(availability, provider);
   const unavailable = known && availability[provider] === false;
+  const unavailableReason = `${providerLabel} is not on PATH. Install it, sign in, and restart the gateway.`;
   const gatewayLabel = gatewayStatus === 'connected' ? 'Gateway connected' : 'Gateway offline';
   const conversation = messages.some((message) => message.role !== 'status');
 
@@ -122,7 +123,7 @@ export function ChatDrawer({
         className="composer"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!sending) onSubmit();
+          if (!sending && !unavailable) onSubmit();
         }}
       >
         <select
@@ -140,7 +141,7 @@ export function ChatDrawer({
             const ready = availability[item.id];
             const suffix = ready === false ? ' · not installed' : ready === true ? '' : '';
             return (
-              <option key={item.id} value={item.id}>
+              <option key={item.id} value={item.id} disabled={ready === false}>
                 {item.label}
                 {suffix}
               </option>
@@ -148,8 +149,8 @@ export function ChatDrawer({
           })}
         </select>
         {unavailable ? (
-          <p className="hint">
-            {providerLabel} is not on PATH. Install it, sign in, and restart the gateway.
+          <p className="hint" title={unavailableReason}>
+            {unavailableReason}
           </p>
         ) : null}
         <textarea
@@ -160,7 +161,7 @@ export function ChatDrawer({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
-              if (!sending) onSubmit();
+              if (!sending && !unavailable) onSubmit();
             }
           }}
         />
@@ -171,7 +172,13 @@ export function ChatDrawer({
               Stop
             </button>
           ) : null}
-          <button type="submit" className="primary" data-action="send" disabled={sending || prompt.trim().length === 0}>
+          <button
+            type="submit"
+            className="primary"
+            data-action="send"
+            disabled={sending || unavailable || prompt.trim().length === 0}
+            title={unavailable ? unavailableReason : undefined}
+          >
             Send
           </button>
         </div>

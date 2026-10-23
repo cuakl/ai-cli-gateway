@@ -29,6 +29,7 @@ export const PTY_DISPOSE_EVENT = 'ai-devtools:pty-dispose';
 export const PTY_DATA_EVENT = 'ai-devtools:pty-data';
 export const PTY_EXIT_EVENT = 'ai-devtools:pty-exit';
 export const RUN_TESTS_EVENT = 'ai-devtools:run-tests';
+export const STOP_TESTS_EVENT = 'ai-devtools:stop-tests';
 export const TEST_OUTPUT_EVENT = 'ai-devtools:test-output';
 export const TEST_DONE_EVENT = 'ai-devtools:test-done';
 
@@ -107,7 +108,7 @@ export function registerDevtoolsSocket(
 ): void {
   const sessions = new WeakMap<StreamClient, Map<string, PromptSession>>();
   const ptySessions = new WeakMap<StreamClient, Set<string>>();
-  const testRuns = new WeakMap<StreamClient, AbortController>();
+  const testRuns = new WeakMap<StreamClient, { controller: AbortController; requestId?: string }>();
   const hmr = createHmrGuard(server.ws);
   const reloadHolds = new Map<string, () => void>();
 
@@ -163,6 +164,14 @@ export function registerDevtoolsSocket(
 
   server.ws.on(RUN_TESTS_EVENT, (data: unknown, client: StreamClient) => {
     return handleRunTests(data, client);
+  });
+
+  server.ws.on(STOP_TESTS_EVENT, (data: unknown, client: StreamClient) => {
+    const requestId = requestIdOf(data);
+    const active = testRuns.get(client);
+    if (!active) return;
+    if (requestId && active.requestId && requestId !== active.requestId) return;
+    active.controller.abort();
   });
 
   async function handleGitDiff(data: unknown, client: StreamClient): Promise<void> {
@@ -268,9 +277,9 @@ export function registerDevtoolsSocket(
       reply(client, TEST_DONE_EVENT, requestId, { ok: false, error: issueMessage(parsed.error) });
       return;
     }
-    testRuns.get(client)?.abort();
+    testRuns.get(client)?.controller.abort();
     const controller = new AbortController();
-    testRuns.set(client, controller);
+    testRuns.set(client, { controller, ...(requestId ? { requestId } : {}) });
     client.socket?.once('close', () => controller.abort());
     try {
       const result = await services.runTests(
@@ -281,13 +290,24 @@ export function registerDevtoolsSocket(
         },
         controller.signal,
       );
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        reply(client, TEST_DONE_EVENT, requestId, {
+          ok: true,
+          cancelled: true,
+          exitCode: result.exitCode,
+          command: result.command,
+        });
+        return;
+      }
       reply(client, TEST_DONE_EVENT, requestId, { ok: true, exitCode: result.exitCode, command: result.command });
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) {
+        reply(client, TEST_DONE_EVENT, requestId, { ok: true, cancelled: true, exitCode: 130, command: '' });
+        return;
+      }
       reply(client, TEST_DONE_EVENT, requestId, { ok: false, error: errorMessage(error) });
     } finally {
-      if (testRuns.get(client) === controller) testRuns.delete(client);
+      if (testRuns.get(client)?.controller === controller) testRuns.delete(client);
     }
   }
 

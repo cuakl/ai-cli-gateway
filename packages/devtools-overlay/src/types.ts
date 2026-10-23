@@ -33,7 +33,8 @@ export interface DevtoolsBridge {
   gitDiff(): Promise<GitDiffSummary>;
   gitCommit(request: GitCommitRequest): Promise<{ commitHash: string; branch: string }>;
   gitRevert(files?: string[]): Promise<void>;
-  runTests(onLine: (line: string) => void): Promise<{ exitCode: number; command: string }>;
+  runTests(onLine: (line: string) => void): Promise<{ exitCode: number; command: string; cancelled?: boolean }>;
+  stopTests(): void;
   spawnPty(cols: number, rows: number): Promise<{ sessionId: string; fallback: boolean }>;
   writePty(sessionId: string, data: string): void;
   resizePty(sessionId: string, cols: number, rows: number): void;
@@ -55,6 +56,8 @@ export interface GatewayBridge {
 export interface DevtoolsConfig {
   gatewayUrl?: string;
   cwd?: string;
+  /** package.json name, shown on the Tests panel. */
+  projectName?: string;
   transport?: GatewayTransportMode;
   client?: GatewayBridge;
   bridge?: DevtoolsBridge;

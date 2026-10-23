@@ -1,29 +1,48 @@
+import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseClaudeLine, ClaudeAdapter, DEFAULT_CLAUDE_TOOLS } from '../../src/adapters/claude.js';
+import { parseClaudeLine, ClaudeAdapter, ClaudeLineParser, DEFAULT_CLAUDE_TOOLS } from '../../src/adapters/claude.js';
 import { createAdapter, ProcessManager } from '../../src/index.js';
 import { collectEvents, ensureFixtures, fixture, resolverFor, tempWorkspace } from './helpers.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('ClaudeAdapter', () => {
   beforeAll(async () => {
     await ensureFixtures();
   });
 
-  it('builds bare headless args and joins allowed tools', () => {
+  it('builds headless args and joins allowed tools', () => {
     const adapter = new ClaudeAdapter();
     expect(adapter.provider).toBe('claude');
     expect(adapter.buildArgs({ prompt: 'fix the layout', cwd: '/repo' })).toEqual([
-      '--bare',
       '-p',
       'fix the layout',
       '--output-format',
       'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--permission-mode',
+      'acceptEdits',
       '--allowedTools',
       DEFAULT_CLAUDE_TOOLS.join(','),
-      '--permission-prompts',
-      'none',
     ]);
     expect(adapter.buildArgs({ prompt: 'fix', cwd: '/repo', allowedTools: ['Read', 'Edit'] })).toContain('Read,Edit');
+    const args = adapter.buildArgs({ prompt: 'fix the layout', cwd: '/repo' });
+    expect(args).not.toContain('--bare');
+    expect(args).not.toContain('--permission-prompts');
+  });
+
+  it('rejects unknown flags the way claude does', async () => {
+    await expect(
+      execFileAsync(process.execPath, [fixture('mock-claude.js'), '--permission-prompts', 'none'], {
+        encoding: 'utf8',
+      }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "error: unknown option '--permission-prompts'\n",
+    });
   });
 
   it('maps Anthropic stream events and plain text', () => {
@@ -69,6 +88,33 @@ describe('ClaudeAdapter', () => {
     expect(done).toMatchObject([
       { type: 'done', payload: { text: 'Updated styles', durationMs: 80, costUsd: 0.02 } },
     ]);
+
+    const parser = new ClaudeLineParser();
+    const streamed = [
+      JSON.stringify({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'OK' } },
+      }),
+      JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', name: 'Edit', input: {} },
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'OK' },
+            { type: 'tool_use', name: 'Edit', input: { file_path: 'src/A.tsx' } },
+          ],
+        },
+      }),
+    ].flatMap((line) => parser.parse(line, 'sess'));
+    expect(streamed.map((event) => event.type)).toEqual(['chunk', 'tool_call', 'file_edit']);
+    expect(streamed[0]?.payload).toMatchObject({ text: 'OK' });
+    expect(streamed[1]?.payload).toMatchObject({ toolArgs: { file_path: 'src/A.tsx' } });
   });
 
   it('streams mock claude events in order', async () => {
@@ -85,6 +131,7 @@ describe('ClaudeAdapter', () => {
       expect(result.summary).toBe('Looking at the button');
       expect(events.map((event) => event.type)).toEqual([
         'init',
+        'chunk',
         'chunk',
         'tool_call',
         'file_edit',

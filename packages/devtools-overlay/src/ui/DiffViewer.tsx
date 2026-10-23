@@ -175,9 +175,10 @@ export function DiffViewer({ summary, loading, error, onCommit, onDiscard, onClo
 
 function FileDiff({ file }: { file: GitDiffFile }) {
   return (
-    <div>
+    <div className="diff-file">
       <div className="diff-file-head">
         <span className="file-status">{file.status}</span>
+        <span className="file-sep" aria-hidden="true">·</span>
         <span className="file-path" title={file.path}>
           {file.path}
         </span>
