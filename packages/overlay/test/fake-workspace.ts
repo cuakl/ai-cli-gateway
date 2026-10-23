@@ -149,6 +149,43 @@ function defaultReply(message: WorkspaceClientMessage, summary: GitDiffSummary):
         runId: message.runId,
         files: [],
       };
+    case 'git.status':
+      return {
+        type: 'git.status.result',
+        requestId: message.requestId,
+        status: {
+          branch: summary.branch ?? 'main',
+          clean: summary.files.length === 0,
+          conflicted: [],
+          dirty: summary.files.map((file) => file.path),
+          ghAvailable: false,
+        },
+      };
+    case 'git.log':
+      return { type: 'git.log.result', requestId: message.requestId, commits: [] };
+    case 'git.discard.hunk':
+      return {
+        type: 'git.discard.hunk.result',
+        requestId: message.requestId,
+        path: message.path,
+        hunkIndex: message.hunkIndex,
+      };
+    case 'git.branch.create':
+      return { type: 'git.branch.create.result', requestId: message.requestId, name: message.name };
+    case 'git.pr.create':
+      return {
+        type: 'git.pr.create.result',
+        requestId: message.requestId,
+        url: 'https://github.com/example/demo/pull/1',
+      };
+    case 'git.commit.undo':
+      return { type: 'git.commit.undo.result', requestId: message.requestId, hash: 'abc1234def' };
+    case 'commit.suggest':
+      return {
+        type: 'commit.suggest.result',
+        requestId: message.requestId,
+        message: 'feat: generated message',
+      };
     default:
       return {
         type: 'error',

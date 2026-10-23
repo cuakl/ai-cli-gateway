@@ -2,7 +2,7 @@ import type { AssistantItem, ChangedFile } from './model.js';
 
 export interface RunFooterProps {
   item: AssistantItem;
-  onReview: () => void;
+  onReview: (runId: string) => void;
   onUndo: (runId: string) => void;
   onKeepGoing: () => void;
 }
@@ -24,7 +24,7 @@ export function RunFooter({ item, onReview, onUndo, onKeepGoing }: RunFooterProp
         <div className="run-footer-actions">
           {files.length > 0 ? (
             <>
-              <button type="button" className="ghost" data-action="run-review" onClick={onReview}>
+              <button type="button" className="ghost" data-action="run-review" onClick={() => onReview(item.runId)}>
                 Review
               </button>
               <button type="button" className="ghost" data-action="run-undo" onClick={() => onUndo(item.runId)}>

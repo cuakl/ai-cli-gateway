@@ -1,4 +1,38 @@
 export const DIFF_CSS = `
+.review-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aid-space-2);
+  padding: var(--aid-space-2) var(--aid-space-3);
+  border-bottom: 1px solid var(--aid-border);
+  background: var(--aid-bg);
+}
+
+.review-scopes, .review-views {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--aid-radius-md);
+  background: var(--aid-bg-hover);
+}
+
+.review-scopes button, .review-views button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--aid-radius-sm);
+  color: var(--aid-text-muted);
+  font-weight: 600;
+}
+
+.review-scopes button[aria-pressed="true"],
+.review-views button[aria-pressed="true"] {
+  background: var(--aid-bg-raised);
+  color: var(--aid-text);
+}
+
 .diff-layout {
   display: flex;
   flex: 1;
@@ -11,6 +45,24 @@ export const DIFF_CSS = `
   overflow: auto;
   border-right: 1px solid var(--aid-border);
   background: var(--aid-bg);
+}
+
+.file-row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.file-check {
+  display: flex;
+  align-items: center;
+  padding-left: var(--aid-space-2);
+}
+
+.file-row button {
+  flex: 1;
+  width: auto;
+  min-width: 0;
 }
 
 .sheet .diff-layout {
@@ -78,9 +130,23 @@ export const DIFF_CSS = `
 }
 
 .diff-file-head, .hunk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aid-space-2);
   padding: var(--aid-space-2) var(--aid-space-3);
   color: var(--aid-text-muted);
   font-family: var(--aid-mono);
+}
+
+.hunk-header button {
+  flex: none;
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
+.hunk-active .hunk-header {
+  background: var(--aid-bg-hover);
 }
 
 .diff-file-head {
@@ -88,6 +154,13 @@ export const DIFF_CSS = `
   align-items: center;
   gap: var(--aid-space-2);
   border-bottom: 1px solid var(--aid-border);
+}
+
+.diff-file-head button {
+  margin-left: auto;
+  flex: none;
+  min-height: 28px;
+  padding: 4px 10px;
 }
 
 .file-status {
@@ -128,6 +201,10 @@ export const DIFF_CSS = `
   white-space: pre;
 }
 
+.diff-split-line, .diff-empty {
+  grid-template-columns: 4ch max-content;
+}
+
 .diff-line code {
   padding-right: var(--aid-space-3);
   color: var(--aid-text);
@@ -135,11 +212,34 @@ export const DIFF_CSS = `
   white-space: pre;
 }
 
+.diff-marker { user-select: none; }
 .diff-add { background: var(--aid-add-bg); }
-.diff-add code { color: var(--aid-success); }
+.diff-add .diff-marker { color: var(--aid-success); }
 .diff-del { background: var(--aid-del-bg); }
-.diff-del code { color: var(--aid-danger); }
+.diff-del .diff-marker { color: var(--aid-danger); }
 .diff-meta { color: var(--aid-text-muted); }
+.diff-empty { background: var(--aid-bg-hover); }
+
+.diff-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-width: 0;
+}
+
+.diff-split-pane {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.diff-split-pane + .diff-split-pane {
+  border-left: 1px solid var(--aid-border);
+}
+
+.tok-keyword { color: var(--aid-accent); }
+.tok-string { color: var(--aid-success); }
+.tok-comment { color: var(--aid-text-muted); }
+.tok-number { color: var(--aid-warning); }
+.tok-tag { color: var(--aid-accent); }
 
 .ln {
   width: 4ch;
@@ -160,7 +260,7 @@ export const DIFF_CSS = `
   background: var(--aid-bg);
 }
 
-.commit-bar input[type="text"], .commit-bar input:not([type]) {
+.commit-bar input[type="text"], .commit-bar input:not([type]), .commit-bar textarea {
   width: 100%;
   padding: 9px var(--aid-space-3);
   border-radius: var(--aid-radius-md);
@@ -168,9 +268,46 @@ export const DIFF_CSS = `
   background: var(--aid-bg);
   color: var(--aid-text);
   outline: none;
+  resize: vertical;
 }
 
-.commit-bar input::placeholder { color: var(--aid-text-muted); }
+.commit-bar input::placeholder, .commit-bar textarea::placeholder { color: var(--aid-text-muted); }
+
+.commit-message-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--aid-space-2);
+}
+
+.commit-message-row textarea { flex: 1; min-width: 0; }
+.commit-message-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aid-space-1);
+  flex: none;
+}
+
+.commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--aid-space-2);
+}
+
+.branch-indicator {
+  color: var(--aid-text);
+  font-family: var(--aid-mono);
+  font-size: var(--aid-text-xs);
+}
+
+.branch-create {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aid-space-2);
+  min-width: 0;
+}
+
+.branch-create input { width: 16ch; }
 
 .push-toggle, .confirm {
   display: flex;
@@ -178,4 +315,26 @@ export const DIFF_CSS = `
   gap: var(--aid-space-2);
   color: var(--aid-text);
 }
+
+.commit-log {
+  padding: var(--aid-space-3) 14px;
+  border-top: 1px solid var(--aid-border);
+  background: var(--aid-bg);
+}
+
+.commit-log ol {
+  margin: var(--aid-space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.commit-log li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--aid-space-2);
+  color: var(--aid-text);
+  font-size: var(--aid-text-sm);
+}
+
+.commit-log code { color: var(--aid-text-muted); }
 `;

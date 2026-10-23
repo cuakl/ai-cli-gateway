@@ -17,7 +17,7 @@ export interface TranscriptProps {
   items: readonly TurnItem[];
   emptyTitle: string;
   emptyHint: string;
-  onReview: () => void;
+  onReview: (runId: string) => void;
   onUndo: (runId: string) => void;
   onKeepGoing: () => void;
   onNoticeAction: (item: NoticeItem, action: string) => void;
@@ -124,7 +124,7 @@ function AssistantTurn({
   onKeepGoing,
 }: {
   item: AssistantItem;
-  onReview: () => void;
+  onReview: (runId: string) => void;
   onUndo: (runId: string) => void;
   onKeepGoing: () => void;
 }) {

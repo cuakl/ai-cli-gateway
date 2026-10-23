@@ -152,10 +152,21 @@ async function exercise(page: Page, url: string): Promise<void> {
   await shot(page, 'chat-after-run');
 
   await page.locator('[data-action="diffs"]').click();
+  await page.locator('[data-action="review-scope-run"][aria-pressed="true"]').waitFor();
   await page.locator('[data-file="src/components/Hero.tsx"]').waitFor();
   await page.locator('[data-file="src/styles.css"]').waitFor();
+  await page.locator('[data-file="src/components/Hero.tsx"]').click();
   await shot(page, 'review');
-  await page.getByLabel('Commit message').fill('style(hero): purple rounded button');
+  await page.locator('[data-action="generate-commit"]').click();
+  await page.waitForFunction(() => {
+    const root = document.querySelector('ai-devtools')?.shadowRoot;
+    const field = root?.querySelector('[aria-label="Commit message"]');
+    return field instanceof HTMLTextAreaElement && field.value.includes('style(hero): purple rounded button');
+  });
+  await page.locator('[data-action="diff-view-split"]').click();
+  await page.locator('.diff-split').waitFor();
+  await shot(page, 'review-split');
+  await page.locator('[data-action="diff-view-unified"]').click();
   await page.locator('[data-action="commit"]').click();
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
   await page.getByText('No changes yet').waitFor();

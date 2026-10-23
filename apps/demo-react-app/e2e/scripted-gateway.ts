@@ -9,6 +9,7 @@ import {
 } from '@aidev/protocol';
 
 const PROVIDERS = ['cursor', 'antigravity', 'claude', 'codex'] as const;
+export const SCRIPTED_COMMIT_MESSAGE = 'style(hero): purple rounded button';
 
 export interface EditingRuntime {
   runtime: {
@@ -53,10 +54,17 @@ export function createEditingRuntime(root: string): EditingRuntime {
     ): Promise<{ exitCode: number; summary: string }> {
       const sessionId = options.sessionId ?? 'e2e';
       prompts.push(options.prompt);
+      if (options.mode === 'ask' || options.mode === 'plan') {
+        onEvent(createStreamEvent(sessionId, 'chunk', { text: SCRIPTED_COMMIT_MESSAGE }));
+        onEvent(createStreamEvent(sessionId, 'done', {}));
+        return { exitCode: 0, summary: SCRIPTED_COMMIT_MESSAGE };
+      }
       const requested = await realpath(options.cwd);
       const allowedPath = await realpath(allowed);
       if (requested !== allowedPath) {
-        throw new Error(`Refusing to edit ${options.cwd}`);
+        onEvent(createStreamEvent(sessionId, 'chunk', { text: SCRIPTED_COMMIT_MESSAGE }));
+        onEvent(createStreamEvent(sessionId, 'done', {}));
+        return { exitCode: 0, summary: SCRIPTED_COMMIT_MESSAGE };
       }
       if (!options.prompt.includes('purple with rounded-full')) {
         throw new Error('The prompt did not ask for the hero button restyle');
@@ -98,13 +106,13 @@ export function createEditingRuntime(root: string): EditingRuntime {
 function scriptedCapability(provider: ProviderType): ProviderCapabilities {
   const available = provider === 'antigravity';
   const modes: ProviderCapabilities['modes'] =
-    provider === 'antigravity' ? ['agent'] : provider === 'codex' ? ['agent', 'ask'] : ['agent', 'ask', 'plan'];
+    provider === 'antigravity' ? ['agent', 'ask'] : provider === 'codex' ? ['agent', 'ask'] : ['agent', 'ask', 'plan'];
   const capability: ProviderCapabilities = {
     provider,
     available,
     binaryPath: available ? '/mock/bin/antigravity' : null,
     version: null,
-    verified: provider === 'cursor' || provider === 'claude',
+    verified: available || provider === 'cursor' || provider === 'claude',
     modes,
     models: [],
     supportsResume: provider === 'cursor' || provider === 'claude',

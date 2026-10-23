@@ -523,3 +523,14 @@ export function chipsFromSummary(summary: ContextSummary | null): ContextChip[] 
 export function countLabel(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
+
+/** Paths from a run's `files_changed` block. Latest run when `runId` is omitted. */
+export function runTouchedFiles(state: ChatState, runId?: string | null): string[] {
+  const assistants = state.items.filter((item): item is AssistantItem => item.kind === 'assistant');
+  const target = runId
+    ? assistants.find((item) => item.runId === runId)
+    : [...assistants].reverse().find((item) => item.blocks.some((block) => block.kind === 'files'));
+  if (!target) return [];
+  const block = [...target.blocks].reverse().find((entry) => entry.kind === 'files');
+  return block?.kind === 'files' ? block.files.map((file) => file.path) : [];
+}

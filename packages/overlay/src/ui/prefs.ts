@@ -20,6 +20,8 @@ export interface AutoAttachPrefs {
   screenshot: boolean;
 }
 
+export type DiffViewMode = 'unified' | 'split';
+
 export interface OverlayPrefs {
   theme: OverlayTheme;
   dockMode: DockMode;
@@ -30,6 +32,7 @@ export interface OverlayPrefs {
   pillCorner: PillCorner;
   sideWidth: number;
   bottomHeight: number;
+  diffView: DiffViewMode;
 }
 
 export interface OverlaySession {
@@ -78,6 +81,8 @@ export function loadPrefs(): Partial<OverlayPrefs> {
   if (typeof record.bottomHeight === 'number' && Number.isFinite(record.bottomHeight)) {
     prefs.bottomHeight = clampBottomHeight(record.bottomHeight, 10_000);
   }
+  const diffView = parseDiffView(record.diffView);
+  if (diffView) prefs.diffView = diffView;
   return prefs;
 }
 
@@ -118,6 +123,7 @@ export function defaultPrefs(): OverlayPrefs {
     pillCorner: 'bottom-right',
     sideWidth: SIDE_CHAT_DEFAULT,
     bottomHeight: BOTTOM_DEFAULT,
+    diffView: 'unified',
   };
 }
 
@@ -148,6 +154,11 @@ function parseMode(value: unknown): RunMode | undefined {
 
 function parseCorner(value: unknown): PillCorner | undefined {
   if (value === 'top-left' || value === 'top-right' || value === 'bottom-left' || value === 'bottom-right') return value;
+  return undefined;
+}
+
+function parseDiffView(value: unknown): DiffViewMode | undefined {
+  if (value === 'unified' || value === 'split') return value;
   return undefined;
 }
 

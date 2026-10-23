@@ -36,6 +36,7 @@ import {
   applyEvent,
   emptyChatState,
   hydrateFromThread,
+  runTouchedFiles,
   startTurn,
   type ChatState,
   type ContextChip,
@@ -44,7 +45,7 @@ import {
 } from './chat/model.js';
 import { CommandPalette, type PaletteItem } from './CommandPalette.js';
 import { ConsolePanel } from './ConsolePanel.js';
-import { DiffViewer } from './DiffViewer.js';
+import { DiffViewer, type ReviewScope } from './DiffViewer.js';
 import {
   eventInsideOverlay,
   isEditableTarget,
@@ -77,6 +78,7 @@ import {
   savePrefs,
   saveSession,
   type AutoAttachPrefs,
+  type DiffViewMode,
   type OverlaySession,
 } from './prefs.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -173,6 +175,10 @@ export function App({ config }: AppProps) {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffCount, setDiffCount] = useState(0);
+  const [diffView, setDiffView] = useState<DiffViewMode>(storedPrefs.diffView ?? 'unified');
+  const [reviewScope, setReviewScope] = useState<ReviewScope>('all');
+  const [reviewRunId, setReviewRunId] = useState<string | null>(null);
+  const [liveRunFiles, setLiveRunFiles] = useState<string[]>([]);
   const elementRef = useRef<Element | null>(null);
   const selectedLocRef = useRef<string | null>(storedSession.selectedLoc ?? null);
   const pickerRef = useRef<ElementPicker | null>(null);
@@ -260,6 +266,16 @@ export function App({ config }: AppProps) {
     if (chat.items.length > 0 || threadId) return [];
     return composerSuggestions({ selected, consoleErrorCount: getRecentErrors().length });
   }, [chat.items.length, threadId, selected, contextTick]);
+  const reviewFiles = useMemo(() => {
+    const fromChat = runTouchedFiles(chat, reviewRunId);
+    if (fromChat.length > 0) return fromChat;
+    if (liveRunFiles.length > 0) return liveRunFiles;
+    return runTouchedFiles(chat, null);
+  }, [chat, reviewRunId, liveRunFiles]);
+  const suggestedBranch = useMemo(
+    () => `aidev/${slugBranch(lastUserText(chat) ?? 'change')}`,
+    [chat],
+  );
 
   const workspace = useMemo<WorkspaceConnection>(() => {
     if (config.workspace) return config.workspace;
@@ -666,8 +682,9 @@ export function App({ config }: AppProps) {
       pillCorner,
       sideWidth,
       bottomHeight,
+      diffView,
     });
-  }, [theme, dockMode, provider, model, mode, autoAttach, pillCorner, sideWidth, bottomHeight]);
+  }, [theme, dockMode, provider, model, mode, autoAttach, pillCorner, sideWidth, bottomHeight, diffView]);
 
   useEffect(() => {
     saveSession(projectKey, {
@@ -801,6 +818,9 @@ export function App({ config }: AppProps) {
     setPrompt('');
     setThreadId(null);
     setRunId(null);
+    setReviewRunId(null);
+    setLiveRunFiles([]);
+    setReviewScope('all');
     hydratedThreadId.current = null;
     attachedRunId.current = null;
     seenEventIds.current.clear();
@@ -887,7 +907,7 @@ export function App({ config }: AppProps) {
       return;
     }
     if (id === 'review') {
-      openSide('diffs', true);
+      openReview();
       return;
     }
     if (id === 'run-tests') {
@@ -925,7 +945,27 @@ export function App({ config }: AppProps) {
   }
 
   function applyRunEvent(localRunId: string, gatewayRunId: string | undefined, event: UnifiedStreamEvent): void {
+    const paths = eventFilePaths(event);
+    if (paths.length > 0) rememberRunFiles(gatewayRunId ?? localRunId, paths, event.type === 'files_changed');
     dispatchChat({ type: 'stream', localRunId, gatewayRunId, event });
+  }
+
+  function rememberRunFiles(id: string, paths: string[], replace: boolean): void {
+    if (paths.length === 0) return;
+    setReviewRunId(id);
+    setReviewScope('run');
+    setLiveRunFiles((current) => (replace ? paths : mergePaths(current, paths)));
+  }
+
+  function openReview(runId?: string): void {
+    if (runId) {
+      setReviewRunId(runId);
+      setReviewScope('run');
+    } else if (reviewFiles.length > 0 || liveRunFiles.length > 0) {
+      setReviewScope('run');
+    }
+    dismissToastsMatching('Edited');
+    openSide('diffs', true);
   }
 
   async function undoRun(runId: string, force = false): Promise<void> {
@@ -1020,10 +1060,7 @@ export function App({ config }: AppProps) {
               {
                 label: 'Review',
                 action: 'review-diffs',
-                onClick: () => {
-                  dismissToastsMatching('Edited');
-                  openSide('diffs', true);
-                },
+                  onClick: () => openReview(),
               },
             ],
           });
@@ -1031,6 +1068,7 @@ export function App({ config }: AppProps) {
       } else if (!stopped && sawEdit) {
         void refreshDiffs();
       }
+      if (sawEdit) setReviewScope('run');
       setSending(false);
       setRunId(null);
       rememberSession({ runId: null });
@@ -1044,8 +1082,8 @@ export function App({ config }: AppProps) {
       }
       if (event.type === 'files_changed') {
         sawEdit = true;
-        const files = event.payload.files;
-        if (Array.isArray(files)) editedCount = Math.max(editedCount, files.length);
+        const files = eventFilePaths(event);
+        if (files.length > 0) editedCount = Math.max(editedCount, files.length);
       }
       if (event.type === 'error') sawError = true;
       if (event.type === 'done') sawDone = true;
@@ -1054,6 +1092,7 @@ export function App({ config }: AppProps) {
       if (event.type === 'done') finish();
     };
 
+    setLiveRunFiles([]);
     markRunStart();
     const attachedChips = chips;
     const excluded = new Set(excludedKinds);
@@ -1163,7 +1202,7 @@ export function App({ config }: AppProps) {
         onMove={setPillCorner}
         onToggleInspect={() => setInspecting((value) => !value)}
         onSelectChat={() => openSide('chat')}
-        onSelectReview={() => openSide('diffs')}
+        onSelectReview={() => openReview()}
         onSelectTerminal={() => openBottom('terminal')}
         onSelectTests={() => openBottom('tests')}
         onSelectConsole={() => openBottom('console')}
@@ -1232,10 +1271,7 @@ export function App({ config }: AppProps) {
                 void submit();
               }}
               onStop={() => stopRun.current?.()}
-              onReview={() => {
-                dismissToastsMatching('Edited');
-                openSide('diffs', true);
-              }}
+              onReview={(id) => openReview(id)}
               onUndo={(runId) => {
                 void undoRun(runId);
               }}
@@ -1249,7 +1285,19 @@ export function App({ config }: AppProps) {
               }}
             />
           ) : (
-            <DiffViewer workspace={workspace} summary={summary} loading={diffLoading} error={diffError} />
+            <DiffViewer
+              workspace={workspace}
+              summary={summary}
+              loading={diffLoading}
+              error={diffError}
+              scope={reviewScope}
+              runFiles={reviewFiles}
+              onScopeChange={setReviewScope}
+              viewMode={diffView}
+              onViewModeChange={setDiffView}
+              onToast={pushToast}
+              suggestedBranch={suggestedBranch}
+            />
           )}
         </SideDock>
       ) : null}
@@ -1421,6 +1469,29 @@ function retargetRun(state: ChatState, from: string, to: string): ChatState {
     return { ...item, runId: to };
   });
   return changed ? { items } : state;
+}
+
+function eventFilePaths(event: UnifiedStreamEvent): string[] {
+  if (event.type === 'file_edit' && event.payload.filePath) return [event.payload.filePath];
+  if (event.type !== 'files_changed' || !event.payload.files) return [];
+  return event.payload.files.filter((file) => file.length > 0);
+}
+
+function mergePaths(current: readonly string[], extra: readonly string[]): string[] {
+  const next = [...current];
+  for (const path of extra) {
+    if (!next.includes(path)) next.push(path);
+  }
+  return next;
+}
+
+function slugBranch(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || 'change';
 }
 
 function lastUserText(state: ChatState): string | undefined {

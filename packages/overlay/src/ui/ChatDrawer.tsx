@@ -30,7 +30,7 @@ export interface ChatDrawerProps {
   onSearchFiles: (query: string) => Promise<string[]>;
   onSubmit: () => void;
   onStop: () => void;
-  onReview: () => void;
+  onReview: (runId: string) => void;
   onUndo: (runId: string) => void;
   onKeepGoing: () => void;
   onNoticeAction: (item: NoticeItem, action: string) => void;
