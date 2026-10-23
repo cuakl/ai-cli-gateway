@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    exclude: ['**/test/live/**', '**/node_modules/**', '**/dist/**'],
     testTimeout: 10_000,
     env: {
       GATEWAY_LOG_LEVEL: 'silent',

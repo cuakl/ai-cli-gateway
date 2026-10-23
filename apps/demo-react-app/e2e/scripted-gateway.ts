@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   createStreamEvent,
   type PromptOptions,
+  type ProviderCapabilities,
   type ProviderType,
   type UnifiedStreamEvent,
 } from '@aidev/protocol';
@@ -22,6 +23,7 @@ export interface EditingRuntime {
       kill: (sessionId: string) => Promise<boolean>;
     };
     listProviders: () => Promise<Array<{ provider: ProviderType; available: boolean; binaryPath: string | null }>>;
+    listCapabilities: () => Promise<ProviderCapabilities[]>;
   };
   prompts: string[];
 }
@@ -86,8 +88,32 @@ export function createEditingRuntime(root: string): EditingRuntime {
           binaryPath: provider === 'antigravity' ? '/mock/bin/antigravity' : null,
         }));
       },
+      async listCapabilities() {
+        return PROVIDERS.map((provider) => scriptedCapability(provider));
+      },
     },
   };
+}
+
+function scriptedCapability(provider: ProviderType): ProviderCapabilities {
+  const available = provider === 'antigravity';
+  const modes: ProviderCapabilities['modes'] =
+    provider === 'antigravity' ? ['agent'] : provider === 'codex' ? ['agent', 'ask'] : ['agent', 'ask', 'plan'];
+  const capability: ProviderCapabilities = {
+    provider,
+    available,
+    binaryPath: available ? '/mock/bin/antigravity' : null,
+    version: null,
+    verified: provider === 'cursor' || provider === 'claude',
+    modes,
+    models: [],
+    supportsResume: provider === 'cursor' || provider === 'claude',
+    supportsImages: false,
+    supportsJsonSchema: false,
+    supportsSystemPrompt: provider === 'cursor' || provider === 'claude',
+  };
+  if (!available) capability.setup = ['Install the CLI and finish sign-in.'];
+  return capability;
 }
 
 function delay(ms: number): Promise<void> {

@@ -180,7 +180,7 @@ export async function isExecutable(filePath: string): Promise<boolean> {
 }
 
 const AUTH_FAILURE =
-  /\b(unauthori[sz]ed|not authenticated|unauthenticated|authentication required|please (log|sign) in|log in required|login required|not logged in|sign in required|invalid api key|missing api key)\b/i;
+  /\b(unauthori[sz]ed|not authenticated|unauthenticated|authentication required|authentication_failed|failed to authenticate|please (log|sign) in|log in required|login required|not logged in|sign in required|invalid api key|missing api key|access token has expired|oauth token has expired|token has expired|re-authenticate)\b/i;
 
 export function providerSetup(provider: ProviderType): string[] {
   switch (provider) {

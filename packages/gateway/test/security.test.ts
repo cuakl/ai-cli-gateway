@@ -1,6 +1,7 @@
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { providerSetup } from '@aidev/adapters';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { isRecord, postJson, requestJson, startTestServer, type TestServer } from './helpers.js';
@@ -32,6 +33,64 @@ describe('auth, CORS, and project scope', () => {
     expect(authed.status).toBe(200);
     expect(isRecord(authed.body) && authed.body.status).toBe('ok');
     expect(isRecord(authed.body) && Array.isArray(authed.body.providers)).toBe(true);
+    if (!isRecord(authed.body) || !Array.isArray(authed.body.providers)) return;
+    const providers = authed.body.providers;
+    expect(providers.map((item) => (isRecord(item) ? item.provider : null))).toEqual([
+      'cursor',
+      'antigravity',
+      'claude',
+      'codex',
+    ]);
+    expect(providers[0]).toMatchObject({
+      provider: 'cursor',
+      available: true,
+      binaryPath: '/mock/bin/cursor',
+      version: null,
+      verified: true,
+      modes: ['agent', 'ask', 'plan'],
+      models: [],
+      supportsResume: true,
+      supportsImages: false,
+      supportsJsonSchema: false,
+      supportsSystemPrompt: true,
+    });
+    expect(providers[0]).not.toHaveProperty('setup');
+    expect(providers[1]).toMatchObject({
+      provider: 'antigravity',
+      available: false,
+      binaryPath: null,
+      verified: false,
+      modes: ['agent'],
+      supportsResume: false,
+      supportsSystemPrompt: false,
+      setup: providerSetup('antigravity'),
+    });
+    expect(providers[2]).toMatchObject({
+      provider: 'claude',
+      available: false,
+      verified: true,
+      modes: ['agent', 'ask', 'plan'],
+      models: [
+        { id: 'sonnet', label: 'sonnet' },
+        { id: 'opus', label: 'opus' },
+        { id: 'haiku', label: 'haiku' },
+      ],
+      supportsResume: true,
+      supportsImages: false,
+      supportsJsonSchema: false,
+      supportsSystemPrompt: true,
+      setup: providerSetup('claude'),
+    });
+    expect(providers[3]).toMatchObject({
+      provider: 'codex',
+      available: false,
+      verified: false,
+      modes: ['agent', 'ask'],
+      models: [],
+      supportsResume: false,
+      supportsSystemPrompt: false,
+      setup: providerSetup('codex'),
+    });
   });
 
   it('omits ACAO for an unknown origin and rejects that origin on the WebSocket', async () => {

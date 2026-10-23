@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProviderType } from '@aidev/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BinaryResolver, defaultProviderCandidates, isExecutable } from '../src/utils/binary.js';
+import { BinaryResolver, defaultProviderCandidates, describeAuthFailure, isExecutable } from '../src/utils/binary.js';
 
 const tempDirs: string[] = [];
 
@@ -152,5 +152,20 @@ describe('BinaryResolver', () => {
     expect(detected.antigravity).toBeNull();
     expect(detected.claude).toBeNull();
     expect(detected.codex).toBeNull();
+  });
+});
+
+describe('describeAuthFailure', () => {
+  it('treats an expired Claude OAuth token as an auth failure', () => {
+    const described = describeAuthFailure(
+      'claude',
+      'Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.',
+    );
+    expect(described?.message).toMatch(/not authenticated/);
+    expect(described?.setup[0]).toMatch(/claude/);
+  });
+
+  it('ignores an ordinary compiler error', () => {
+    expect(describeAuthFailure('claude', "error: unknown option '--not-a-real-flag'")).toBeNull();
   });
 });

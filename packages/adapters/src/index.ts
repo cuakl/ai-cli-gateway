@@ -8,6 +8,15 @@ export {
   createAdapter,
   getAvailableAdapters,
 } from './adapters/index.js';
+export {
+  PROVIDER_MODEL_CACHE_MS,
+  capabilitiesFromAvailability,
+  clearProviderCapabilityCache,
+  getProviderCapabilities,
+  helpIncludesFlag,
+  parseCursorModelList,
+} from './capabilities.js';
+export type { CapabilityExecFile, ExecFileResult, GetProviderCapabilitiesOptions } from './capabilities.js';
 export type { AdapterAvailability, CreateAdapterOptions } from './adapters/index.js';
 export { ProcessManager } from './session/manager.js';
 export {

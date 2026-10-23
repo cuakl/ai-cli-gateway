@@ -47,7 +47,10 @@ describe('aidev cli', () => {
     });
     expect(code).toBe(0);
     const text = lines.join('\n');
+    expect(text).toContain('provider');
+    expect(text).toContain('verified');
+    expect(text).toContain('models');
     expect(text).toContain('cursor');
     expect(text).toContain('claude');
-  });
+  }, 45_000);
 });

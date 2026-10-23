@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { openSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { getAvailableAdapters } from '@aidev/adapters';
+import { createAdapter, getProviderCapabilities, type ProviderType } from '@aidev/adapters';
 import { startServer } from './app.js';
 import { CLI_NAME } from './brand.js';
 import { ensureHome, readConfig, readMachineToken, resolveAidevHome, writeConfig } from './home.js';
@@ -17,7 +18,7 @@ const USAGE = `Usage: ${CLI_NAME} <command>
   start [--port N] [--detach]   Listen on 127.0.0.1. --detach writes a pid file and a log.
   stop                          Stop the detached gateway.
   status                        Print health, projects, and active runs.
-  doctor                        Print provider binaries and versions.
+  doctor [--live]               Print provider capabilities. --live asks each CLI to reply OK.
   projects add <path> [--origin URL]
                                 Register a project root.
   open                          Print and open the dashboard URL.
@@ -50,6 +51,7 @@ export async function run(
       port: { type: 'string' },
       detach: { type: 'boolean', default: false },
       origin: { type: 'string' },
+      live: { type: 'boolean', default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -62,7 +64,7 @@ export async function run(
     case 'status':
       return commandStatus(env, io);
     case 'doctor':
-      return commandDoctor(io);
+      return commandDoctor(io, values.live === true);
     case 'projects':
       return commandProjects(positionals, values.origin, env, io);
     case 'open':
@@ -227,16 +229,69 @@ async function commandStatus(env: NodeJS.ProcessEnv, io: CliIo): Promise<number>
   return 0;
 }
 
-async function commandDoctor(io: CliIo): Promise<number> {
+async function commandDoctor(io: CliIo, live: boolean): Promise<number> {
   io.stdout(`${CLI_NAME} ${GATEWAY_VERSION}`);
-  const found = await getAvailableAdapters();
-  const rows: string[][] = [['provider', 'available', 'version', 'binary']];
+  const found = await getProviderCapabilities();
+  const rows: string[][] = [['provider', 'available', 'version', 'verified', 'modes', 'models', 'binary']];
   for (const item of found) {
-    const version = item.binaryPath ? ((await binaryVersion(item.binaryPath)) ?? '-') : '-';
-    rows.push([item.provider, item.available ? 'yes' : 'no', version, item.binaryPath ?? '-']);
+    rows.push([
+      item.provider,
+      item.available ? 'yes' : 'no',
+      item.version ?? '-',
+      item.verified ? 'yes' : 'no',
+      item.modes.join(','),
+      String(item.models.length),
+      item.binaryPath ?? '-',
+    ]);
   }
   io.stdout(formatTable(rows));
+  if (!live) return 0;
+
+  const probes: string[][] = [['probe', 'result', 'detail']];
+  for (const item of found) {
+    if (!item.available) continue;
+    const probe = await probeProvider(item.provider);
+    probes.push([item.provider, probe.ok ? 'pass' : 'fail', clip(probe.detail)]);
+  }
+  io.stdout('');
+  if (probes.length === 1) {
+    io.stdout('live probe: no available providers');
+    return 0;
+  }
+  io.stdout(formatTable(probes));
   return 0;
+}
+
+async function probeProvider(provider: ProviderType): Promise<{ ok: boolean; detail: string }> {
+  const cwd = await mkdtemp(path.join(tmpdir(), 'aidev-doctor-'));
+  try {
+    const adapter = createAdapter(provider);
+    const errors: string[] = [];
+    const result = await adapter.execute(
+      {
+        prompt: 'Reply with exactly: OK',
+        cwd,
+        mode: 'ask',
+        ephemeral: true,
+        timeoutMs: 180_000,
+      },
+      (event) => {
+        if (event.type === 'error' && event.payload.error) errors.push(event.payload.error);
+      },
+    );
+    const output = result.summary.trim();
+    if (result.exitCode === 0 && output.includes('OK')) return { ok: true, detail: output };
+    return { ok: false, detail: errors.join(' ') || output || `exit ${result.exitCode}` };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+function clip(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return (flat || '(no output)').slice(0, 80);
 }
 
 async function commandProjects(
@@ -336,35 +391,6 @@ function alive(pid: number): boolean {
   } catch {
     return false;
   }
-}
-
-async function binaryVersion(bin: string): Promise<string | null> {
-  try {
-    const result = await execFileAsync(bin, ['--version'], { timeout: 2_000 });
-    const line = `${result.stdout}\n${result.stderr}`
-      .split('\n')
-      .map((item) => item.trim())
-      .find(Boolean);
-    return line ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function execFileAsync(
-  file: string,
-  args: string[],
-  options: { timeout: number },
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: options.timeout, encoding: 'utf8' }, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve({ stdout: String(stdout), stderr: String(stderr) });
-    });
-  });
 }
 
 async function waitForHealth(url: string, timeoutMs: number): Promise<boolean> {

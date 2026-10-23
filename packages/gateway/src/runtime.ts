@@ -3,10 +3,11 @@ import {
   ProcessManager,
   createAdapter,
   getAvailableAdapters,
+  getProviderCapabilities,
   type AdapterAvailability,
   type CLIAdapter,
 } from '@aidev/adapters';
-import type { ProviderType } from '@aidev/protocol';
+import type { ProviderCapabilities, ProviderType } from '@aidev/protocol';
 
 /**
  * The server asks the runtime for a provider adapter and for the detected CLIs.
@@ -16,6 +17,7 @@ import type { ProviderType } from '@aidev/protocol';
 export interface GatewayRuntime {
   getAdapter(provider: ProviderType): CLIAdapter;
   listProviders(): Promise<AdapterAvailability[]>;
+  listCapabilities(): Promise<ProviderCapabilities[]>;
 }
 
 export function createDefaultRuntime(): GatewayRuntime {
@@ -33,6 +35,9 @@ export function createDefaultRuntime(): GatewayRuntime {
     },
     listProviders() {
       return getAvailableAdapters({ binaries });
+    },
+    listCapabilities() {
+      return getProviderCapabilities({ binaries });
     },
   };
 }

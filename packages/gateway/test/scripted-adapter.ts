@@ -1,6 +1,6 @@
-import type { AdapterAvailability, CLIAdapter, ExecuteResult } from '@aidev/adapters';
+import { capabilitiesFromAvailability, type AdapterAvailability, type CLIAdapter, type ExecuteResult } from '@aidev/adapters';
+import type { PromptOptions, ProviderCapabilities, ProviderType, UnifiedStreamEvent } from '@aidev/protocol';
 import type { GatewayRuntime } from '../src/runtime.js';
-import type { PromptOptions, ProviderType, UnifiedStreamEvent } from '@aidev/protocol';
 
 export interface ScriptContext {
   options: PromptOptions;
@@ -64,27 +64,32 @@ export class ScriptedAdapter implements CLIAdapter {
 const PROVIDERS = ['cursor', 'antigravity', 'claude', 'codex'] as const;
 
 export function runtimeFor(adapters: Partial<Record<ProviderType, CLIAdapter>>): GatewayRuntime {
+  const listProviders = async (): Promise<AdapterAvailability[]> => {
+    const listed: AdapterAvailability[] = [];
+    for (const provider of PROVIDERS) {
+      const adapter = adapters[provider];
+      if (!adapter) {
+        listed.push({ provider, available: false, binaryPath: null });
+        continue;
+      }
+      try {
+        listed.push({ provider, available: true, binaryPath: await adapter.getBinaryPath() });
+      } catch {
+        listed.push({ provider, available: false, binaryPath: null });
+      }
+    }
+    return listed;
+  };
+
   return {
     getAdapter(provider) {
       const adapter = adapters[provider];
       if (!adapter) throw new Error(`Provider ${provider} is not available`);
       return adapter;
     },
-    async listProviders(): Promise<AdapterAvailability[]> {
-      const listed: AdapterAvailability[] = [];
-      for (const provider of PROVIDERS) {
-        const adapter = adapters[provider];
-        if (!adapter) {
-          listed.push({ provider, available: false, binaryPath: null });
-          continue;
-        }
-        try {
-          listed.push({ provider, available: true, binaryPath: await adapter.getBinaryPath() });
-        } catch {
-          listed.push({ provider, available: false, binaryPath: null });
-        }
-      }
-      return listed;
+    listProviders,
+    async listCapabilities(): Promise<ProviderCapabilities[]> {
+      return capabilitiesFromAvailability(await listProviders());
     },
   };
 }
