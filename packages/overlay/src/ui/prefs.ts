@@ -39,6 +39,7 @@ export interface OverlaySession {
   bottomTab: BottomTab;
   prompt: string;
   threadId: string | null;
+  runId: string | null;
   selectedLoc: string | null;
 }
 
@@ -95,6 +96,7 @@ export function loadSession(projectId: string): Partial<OverlaySession> {
   if (record.bottomTab === 'terminal' || record.bottomTab === 'tests') session.bottomTab = record.bottomTab;
   if (typeof record.prompt === 'string') session.prompt = record.prompt;
   if (typeof record.threadId === 'string' || record.threadId === null) session.threadId = record.threadId;
+  if (typeof record.runId === 'string' || record.runId === null) session.runId = record.runId;
   if (typeof record.selectedLoc === 'string' || record.selectedLoc === null) session.selectedLoc = record.selectedLoc;
   return session;
 }

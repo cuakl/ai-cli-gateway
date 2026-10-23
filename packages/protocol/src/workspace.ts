@@ -122,6 +122,9 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
   withType('run.cancel', {
     runId: RunIdSchema,
   }),
+  withType('run.attach', {
+    runId: RunIdSchema,
+  }),
   withType('thread.list', {}),
   withType('thread.get', {
     threadId: ThreadIdSchema,
@@ -205,6 +208,13 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
 
 export type WorkspaceClientMessage = z.infer<typeof WorkspaceClientMessageSchema>;
 
+/** `thread.list.result` row: the stored thread plus how many runs it has. */
+export const ThreadListItemSchema = ThreadSchema.extend({
+  runCount: z.number().int().nonnegative(),
+});
+
+export type ThreadListItem = z.infer<typeof ThreadListItemSchema>;
+
 /**
  * Gateway → client messages on the project WebSocket.
  * Push events (`run.event`, `git.changed`, `pty.data`, …) may omit `requestId`.
@@ -247,7 +257,7 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
     report: TestReportSchema.optional(),
   }),
   withType('thread.list.result', {
-    threads: z.array(ThreadSchema),
+    threads: z.array(ThreadListItemSchema),
   }),
   withType('thread.get.result', {
     thread: ThreadSchema,

@@ -146,6 +146,64 @@ describe('workspace WebSocket', () => {
     }
   });
 
+  it('replays and continues a run when a second socket attaches', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const adapter = new ScriptedAdapter('cursor', async (ctx) => {
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'chunk', { text: 'one', segment: 0 }));
+      await gate;
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'chunk', { text: 'two', segment: 0 }));
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'done', { durationMs: 4 }));
+      return { exitCode: 0, summary: 'two' };
+    });
+    const root = await tempDir('ws-attach-');
+    const server = await startProject(root, adapter);
+    const project = await register(server, root);
+    const starter = await openSocket(projectWs(server, project.id, project.token));
+    const started = collect(starter);
+    try {
+      starter.send(JSON.stringify({ ...runStart('stream this twice'), mode: 'ask' }));
+      await started.waitFor((items) =>
+        items.some((item) => item.type === 'run.event' && item.event.payload.text === 'one'),
+      );
+      const accepted = started.items.find((item) => item.type === 'run.accepted');
+      if (!accepted || accepted.type !== 'run.accepted') throw new Error('run was not accepted');
+      const attacher = await openSocket(projectWs(server, project.id, project.token));
+      const attached = collect(attacher);
+      try {
+        attacher.send(JSON.stringify({ type: 'run.attach', requestId: 'attach-1', runId: accepted.runId }));
+        await attached.waitFor((items) =>
+          items.some((item) => item.type === 'run.event' && item.event.payload.text === 'one'),
+        );
+        release();
+        await attached.waitFor((items) => items.some((item) => item.type === 'run.finished'));
+        await started.waitFor((items) => items.some((item) => item.type === 'run.finished'));
+        const events = attached.items.flatMap((item) => (item.type === 'run.event' ? [item.event] : []));
+        const chunks = events.filter((event) => event.type === 'chunk').map((event) => event.payload.text);
+        expect(chunks.filter((text) => text === 'one')).toHaveLength(1);
+        expect(chunks.filter((text) => text === 'two')).toHaveLength(1);
+        expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+        expect(attached.items.filter((item) => item.type === 'run.finished')).toHaveLength(1);
+        for (const item of attached.items) {
+          if (item.type === 'run.event' || item.type === 'run.finished') expect(item.requestId).toBe('attach-1');
+        }
+        attacher.send(JSON.stringify({ type: 'thread.list', requestId: 'list-1' }));
+        await attached.waitFor((items) => items.some((item) => item.requestId === 'list-1'));
+        expect(attached.items.find((item) => item.requestId === 'list-1')).toMatchObject({
+          type: 'thread.list.result',
+          threads: [{ id: accepted.threadId, runCount: 1 }],
+        });
+      } finally {
+        await closeSocket(attacher);
+      }
+    } finally {
+      release();
+      await closeSocket(starter);
+    }
+  });
+
   it('accepts run.start without context or attachments', async () => {
     const adapter = new ScriptedAdapter('cursor', async (ctx) => {
       ctx.onEvent(createStreamEvent(ctx.sessionId, 'chunk', { text: 'ok' }));

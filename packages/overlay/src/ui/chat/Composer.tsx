@@ -168,7 +168,7 @@ export function Composer({
           <textarea
             ref={textareaRef}
             value={prompt}
-            placeholder="Change the hero button to a deep violet with fully rounded corners"
+            placeholder="Describe a change · @ to mention a file"
             aria-label="Prompt"
             role="combobox"
             aria-autocomplete="list"

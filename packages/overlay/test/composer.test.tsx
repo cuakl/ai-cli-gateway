@@ -268,7 +268,11 @@ describe('composer', () => {
     const workspace = createStreamingWorkspace({
       onRequest(message) {
         if (message.type === 'thread.list') {
-          return { type: 'thread.list.result', requestId: message.requestId, threads: [thread] };
+          return {
+            type: 'thread.list.result',
+            requestId: message.requestId,
+            threads: [{ ...thread, runCount: 1 }],
+          };
         }
         if (message.type === 'thread.get' && message.threadId === 'thr_hist') {
           return {
@@ -307,6 +311,7 @@ describe('composer', () => {
     await vi.waitFor(() => expect(shadow?.querySelector('[data-thread-id="thr_hist"]')).toBeTruthy());
     expect(shadow?.textContent).toContain('Make it blue');
     expect(shadow?.textContent).toContain('1 run');
+    expect(workspace.sent.filter((message) => message.type === 'thread.get')).toHaveLength(0);
     (shadow?.querySelector('[data-thread-id="thr_hist"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(shadow?.textContent).toContain('Done.'));
     await typePrompt(shadow, 'now make it bigger');

@@ -451,6 +451,13 @@ const samples: Sample[] = [
     invalid: { type: 'run.cancel', runId: 'sess_abc' },
   },
   {
+    name: 'run.attach',
+    schema: WorkspaceClientMessageSchema,
+    wire: 'client',
+    valid: { type: 'run.attach', runId: 'run_abc' },
+    invalid: { type: 'run.attach' },
+  },
+  {
     name: 'thread.list',
     schema: WorkspaceClientMessageSchema,
     wire: 'client',
@@ -719,7 +726,7 @@ const samples: Sample[] = [
     name: 'thread.list.result',
     schema: WorkspaceServerMessageSchema,
     wire: 'server',
-    valid: { type: 'thread.list.result', threads: [thread] },
+    valid: { type: 'thread.list.result', threads: [{ ...thread, runCount: 2 }] },
     invalid: { type: 'thread.list.result', threads: {} },
   },
   {

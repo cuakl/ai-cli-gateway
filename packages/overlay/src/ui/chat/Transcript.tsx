@@ -102,7 +102,7 @@ export function Transcript({
 
 function UserBubble({ item }: { item: UserItem }) {
   return (
-    <div className="message user">
+    <div className="message user" data-kind="user">
       <p className="user-text">{item.text}</p>
       {item.chips.length > 0 ? (
         <div className="user-chips">
@@ -129,7 +129,7 @@ function AssistantTurn({
   onKeepGoing: () => void;
 }) {
   return (
-    <div className="assistant-item">
+    <div className="assistant-item" data-kind="assistant">
       {groupToolBlocks(item.blocks).map((entry, index) => {
         if (entry.kind === 'read-group') {
           return (
@@ -171,8 +171,12 @@ function FilesList({ files }: { files: readonly ChangedFile[] }) {
       {files.map((file) => (
         <li key={file.path}>
           <span className="files-path">{file.path}</span>
-          <span className="files-add">+{file.additions}</span>
-          <span className="files-del">−{file.deletions}</span>
+          {file.additions || file.deletions ? (
+            <>
+              <span className="files-add">+{file.additions}</span>
+              <span className="files-del">−{file.deletions}</span>
+            </>
+          ) : null}
         </li>
       ))}
     </ul>

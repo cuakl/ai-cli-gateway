@@ -25,6 +25,8 @@ const temps: string[] = [];
 
 describe('withAidev', () => {
   beforeEach(() => {
+    vi.stubEnv('GATEWAY_URL', undefined);
+    vi.stubEnv('PORT', undefined);
     mocks.ensureGateway.mockReset();
     mocks.readMachineToken.mockReset();
     mocks.registerProject.mockReset();

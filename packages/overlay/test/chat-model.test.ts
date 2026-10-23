@@ -329,6 +329,29 @@ describe('hydrateFromThread', () => {
     expect(assistantOf(state).blocks).toEqual([{ kind: 'markdown', text: 'Done.' }]);
     expect(assistantOf(state).status).toBe('done');
   });
+
+  it('leaves a running run open so live attach can continue it', () => {
+    const run: Run = {
+      id: RUN,
+      threadId: 'thr_1',
+      prompt: 'Make it green',
+      contextSummary: null,
+      attachments: [],
+      status: 'running',
+      startedAt: 1,
+      endedAt: null,
+      checkpoint: null,
+      filesTouched: [],
+      error: null,
+      usage: null,
+    };
+    const state = hydrateFromThread([run], [
+      { runId: RUN, event: evt('chunk', { text: 'Working', segment: 0 }) },
+    ]);
+    expect(state.items[0]).toMatchObject({ kind: 'user', text: 'Make it green' });
+    expect(assistantOf(state).blocks).toEqual([{ kind: 'markdown', text: 'Working' }]);
+    expect(assistantOf(state).status).toBe('running');
+  });
 });
 
 function begin(): ChatState {

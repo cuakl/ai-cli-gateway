@@ -52,7 +52,7 @@ export interface WorkspaceConnection {
   ): Promise<WorkspaceReply<T['type']>>;
   /**
    * Transmit a command that has no `<type>.result` reply.
-   * `run.cancel`, `pty.input`, `pty.resize`, `pty.dispose`, `test.run`, and `test.stop`.
+   * `run.cancel`, `run.attach`, `pty.input`, `pty.resize`, `pty.dispose`, `test.run`, and `test.stop`.
    */
   send(message: WorkspaceClientMessage): void;
   on<T extends WorkspaceServerMessage['type']>(

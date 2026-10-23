@@ -78,6 +78,7 @@ describe('overlay prefs storage', () => {
       bottomTab: 'tests',
       prompt: 'make it emerald',
       threadId: 'thr_1',
+      runId: 'run_1',
       selectedLoc: 'src/App.tsx:1:1',
     };
     saveSession('proj-a', snapshot);
@@ -112,6 +113,7 @@ describe('overlay prefs storage', () => {
         bottomTab: 'terminal',
         prompt: '',
         threadId: null,
+        runId: null,
         selectedLoc: null,
       }),
     ).not.toThrow();

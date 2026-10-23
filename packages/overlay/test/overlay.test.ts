@@ -1,4 +1,4 @@
-import type { UnifiedStreamEvent, WorkspaceServerMessage } from '@aidev/protocol';
+import type { Run, Thread, UnifiedStreamEvent, WorkspaceServerMessage } from '@aidev/protocol';
 import { toPng } from 'html-to-image';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -267,7 +267,192 @@ describe('initDevtools', () => {
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
     expect(fetchMock).toHaveBeenCalled();
   });
+
+  it('clears the composer draft once run.start is accepted', async () => {
+    const workspace = createFakeWorkspace({
+      state: 'open',
+      onRequest(message, emit) {
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'chunk', { text: 'Updated', segment: 0 }));
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
+      },
+    });
+    const host = initDevtools({ workspace, projectId: 'proj_draft' });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Make it emerald';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(textarea.value).toBe(''));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('Updated'));
+    expect(JSON.parse(sessionStorage.getItem('aidev:session:proj_draft') ?? '{}')).toMatchObject({
+      prompt: '',
+      threadId: 'thr_1',
+    });
+  });
+
+  it('restores the transcript after unmount when the session still has a threadId', async () => {
+    const storedRun = sampleRun('run_1', 'thr_1', 'Make it emerald', 'succeeded');
+    const workspace = createFakeWorkspace({
+      state: 'open',
+      onRequest(message, emit) {
+        if (message.type === 'thread.get' && message.threadId === 'thr_1') {
+          return {
+            type: 'thread.get.result',
+            requestId: message.requestId,
+            thread: sampleThread('thr_1'),
+            runs: [storedRun],
+            events: [
+              threadEvent('run_1', 'chunk', { text: 'Updated the button', segment: 0 }),
+              threadEvent('run_1', 'done', {}),
+            ],
+          };
+        }
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'chunk', { text: 'Updated the button', segment: 0 }));
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
+      },
+    });
+    const first = initDevtools({ workspace, projectId: 'proj_restore' });
+    const firstShadow = first?.shadowRoot;
+    (firstShadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = firstShadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Make it emerald';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (firstShadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(firstShadow?.textContent).toContain('Updated the button'));
+    expect(textarea.value).toBe('');
+    await vi.waitFor(() =>
+      expect(JSON.parse(sessionStorage.getItem('aidev:session:proj_restore') ?? '{}').threadId).toBe('thr_1'),
+    );
+    first?.remove();
+
+    const second = initDevtools({ workspace, projectId: 'proj_restore' });
+    const shadow = second?.shadowRoot;
+    await vi.waitFor(() =>
+      expect(shadow?.querySelector('[data-kind="user"]')?.textContent ?? '').toContain('Make it emerald'),
+    );
+    expect(shadow?.querySelector('[data-kind="assistant"]')?.textContent).toContain('Updated the button');
+    expect((shadow?.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('attaches an active run after reload and shows the stop button', async () => {
+    const storedRun = sampleRun('run_1', 'thr_1', 'Keep going', 'running');
+    const workspace = createFakeWorkspace({
+      state: 'open',
+      onRequest(message) {
+        if (message.type === 'thread.get' && message.threadId === 'thr_1') {
+          return {
+            type: 'thread.get.result',
+            requestId: message.requestId,
+            thread: sampleThread('thr_1'),
+            runs: [storedRun],
+            events: [threadEvent('run_1', 'chunk', { text: 'Hello', segment: 0 })],
+          };
+        }
+        if (message.type !== 'run.start') return undefined;
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
+      },
+      onSend(message, emit) {
+        if (message.type !== 'run.attach') return;
+        emit(runEvent(message.requestId, 'chunk', { text: 'Hello', segment: 0 }));
+        emit({
+          type: 'run.event',
+          requestId: message.requestId,
+          runId: 'run_1',
+          event: {
+            id: 'evt_world',
+            sessionId: 'sess_1',
+            type: 'chunk',
+            timestamp: 2,
+            payload: { text: 'World', segment: 0 },
+          },
+        });
+      },
+    });
+    const first = initDevtools({ workspace, projectId: 'proj_attach' });
+    const firstShadow = first?.shadowRoot;
+    (firstShadow?.querySelector('[data-action="chat"]') as HTMLButtonElement).click();
+    const textarea = firstShadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Keep going';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (firstShadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(firstShadow?.querySelector('[data-action="stop"]')).toBeTruthy());
+    await vi.waitFor(() =>
+      expect(JSON.parse(sessionStorage.getItem('aidev:session:proj_attach') ?? '{}')).toMatchObject({
+        threadId: 'thr_1',
+        runId: 'run_1',
+        prompt: '',
+      }),
+    );
+    first?.remove();
+
+    const second = initDevtools({ workspace, projectId: 'proj_attach' });
+    const shadow = second?.shadowRoot;
+    await vi.waitFor(() => expect(workspace.sent.some((message) => message.type === 'run.attach')).toBe(true));
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-action="stop"]')).toBeTruthy());
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-kind="user"]')?.textContent).toContain('Keep going'));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('Hello'));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('World'));
+  });
 });
+
+function sampleThread(id: string): Thread {
+  return {
+    id,
+    projectId: 'proj_restore',
+    provider: 'cursor',
+    model: null,
+    mode: 'agent',
+    providerSessionId: null,
+    title: 'Make it emerald',
+    createdAt: 1,
+    updatedAt: 2,
+    keep: true,
+    source: 'overlay',
+  };
+}
+
+function sampleRun(id: string, threadId: string, prompt: string, status: Run['status']): Run {
+  return {
+    id,
+    threadId,
+    prompt,
+    contextSummary: null,
+    attachments: [],
+    status,
+    startedAt: 1,
+    endedAt: status === 'running' || status === 'queued' ? null : 2,
+    checkpoint: null,
+    filesTouched: [],
+    error: null,
+    usage: status === 'succeeded' ? { durationMs: 8 } : null,
+  };
+}
+
+function threadEvent(
+  runId: string,
+  type: UnifiedStreamEvent['type'],
+  payload: UnifiedStreamEvent['payload'] = {},
+): { runId: string; event: UnifiedStreamEvent } {
+  return {
+    runId,
+    event: {
+      id: `evt_${type}_${String(payload.segment ?? 'n')}`,
+      sessionId: 'sess_1',
+      type,
+      timestamp: 1,
+      payload,
+    },
+  };
+}
 
 function runEvent(
   requestId: string | undefined,

@@ -403,6 +403,10 @@ function isErrorStatus(status: AssistantStatus): boolean {
   return status === 'error' || status === 'failed' || status === 'timeout';
 }
 
+function isTerminalRun(status: RunStatus): boolean {
+  return status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'timeout';
+}
+
 function withTarget(verb: string, target: string | undefined): string {
   return target ? `${verb} \`${target}\`` : verb;
 }
@@ -467,7 +471,7 @@ export function hydrateFromThread(runs: readonly Run[], events: readonly ThreadE
       if (event.type === 'done') sawDone = true;
       state = applyEvent(state, run.id, event);
     }
-    if (!sawDone) {
+    if (!sawDone && isTerminalRun(run.status)) {
       state = applyEvent(state, run.id, {
         id: `hydrate_done_${run.id}`,
         sessionId: run.threadId,

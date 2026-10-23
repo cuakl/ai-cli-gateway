@@ -130,6 +130,24 @@ async function exercise(page: Page, url: string): Promise<void> {
     undefined,
     { timeout: 20_000 },
   );
+  await page.waitForFunction(
+    (prompt) => {
+      const root = document.querySelector('ai-devtools')?.shadowRoot;
+      if (!root) return false;
+      const user = root.querySelector('[data-kind="user"] .user-text, .user-text');
+      const assistant = root.querySelector('[data-kind="assistant"], .assistant-item');
+      const textarea = root.querySelector('textarea');
+      return Boolean(
+        user?.textContent?.includes(prompt) &&
+          assistant &&
+          (assistant.textContent?.trim().length ?? 0) > 0 &&
+          textarea instanceof HTMLTextAreaElement &&
+          textarea.value === '',
+      );
+    },
+    PROMPT,
+    { timeout: 20_000 },
+  );
   await shot(page, 'chat-after-run');
 
   await page.locator('[data-action="diffs"]').click();

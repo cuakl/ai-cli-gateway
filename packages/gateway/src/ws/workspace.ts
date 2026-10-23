@@ -52,6 +52,9 @@ interface TrackedRun {
   sessionId?: string;
   projectId: string;
   threadId: string;
+  /** Resolves once the CLI session exists, or the accept is abandoned. */
+  started: Promise<void>;
+  markStarted: () => void;
 }
 
 interface LivePty {
@@ -175,8 +178,16 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         case 'run.cancel':
           await cancelRun(message);
           return;
+        case 'run.attach':
+          await attachRun(message);
+          return;
         case 'thread.list': {
-          const threads = await deps.threads.listThreads({ projectId });
+          const listed = await deps.threads.listThreads({ projectId });
+          const threads = [];
+          for (const thread of listed) {
+            const record = await deps.threads.getThread(thread.id);
+            threads.push({ ...thread, runCount: record?.runs.length ?? 0 });
+          }
           reply({
             type: 'thread.list.result',
             ...(message.requestId ? { requestId: message.requestId } : {}),
@@ -446,7 +457,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
           mode: message.mode,
           checkpoint: null,
         };
-        runs.set(binding.runId, { runId: binding.runId, projectId, threadId: thread.id });
+        runs.set(binding.runId, trackedRun(binding.runId, projectId, thread.id));
         reply({
           type: 'run.accepted',
           ...(message.requestId ? { requestId: message.requestId } : {}),
@@ -463,7 +474,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       try {
         lease = await leasePromise;
       } catch (error) {
+        const tracked = runs.get(runId);
         runs.delete(runId);
+        tracked?.markStarted();
         if (error instanceof RunCancelledError) {
           const cancelled = runFromOutcome(binding, { status: 'killed', exitCode: 1, events: [] });
           try {
@@ -513,7 +526,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         lease = undefined;
       } catch (error) {
         lease?.release();
+        const tracked = runs.get(runId);
         runs.delete(runId);
+        tracked?.markStarted();
         await abortThreadRun(deps, binding, error);
         activity(projectId);
         const httpError = error instanceof HttpError ? error : executionHttpError(error);
@@ -526,7 +541,16 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         return;
       }
 
-      runs.set(runId, { runId, sessionId, projectId, threadId: thread.id });
+      const trackedLive = runs.get(runId);
+      if (trackedLive) {
+        trackedLive.sessionId = sessionId;
+        trackedLive.markStarted();
+      } else {
+        const tracked = trackedRun(runId, projectId, thread.id);
+        tracked.sessionId = sessionId;
+        tracked.markStarted();
+        runs.set(runId, tracked);
+      }
       activity(projectId);
 
       let live = false;
@@ -555,7 +579,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         ...(message.requestId ? { requestId: message.requestId } : {}),
         run: outcome.run,
       });
+      const finished = runs.get(runId);
       runs.delete(runId);
+      finished?.markStarted();
       if (isAgentMode(message.mode)) {
         try {
           broadcast(projectId, { type: 'git.changed', summary: await getDiff(project.root) });
@@ -564,6 +590,80 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         }
       }
       activity(projectId);
+    }
+
+    async function attachRun(message: Extract<WorkspaceClientMessage, { type: 'run.attach' }>): Promise<void> {
+      const found = await deps.threads.findRun(message.runId);
+      if (!found || found.thread.projectId !== projectId) {
+        throw new HttpError(404, 'not_found', `Run ${message.runId} was not found`);
+      }
+
+      const runId = message.runId;
+      const requestId = message.requestId;
+      const seen = new Set<string>();
+      let unsubscribe = (): void => {};
+      let closed = false;
+
+      const sendEvent = (event: UnifiedStreamEvent): void => {
+        if (closed || seen.has(event.id)) return;
+        seen.add(event.id);
+        reply({
+          type: 'run.event',
+          ...(requestId ? { requestId } : {}),
+          runId,
+          event,
+        });
+      };
+
+      const onClose = (): void => {
+        closed = true;
+        unsubscribe();
+      };
+      socket.on('close', onClose);
+
+      try {
+        let active = deps.runs.get(runId);
+        if (!active) {
+          const tracked = runs.get(runId);
+          if (tracked) await tracked.started;
+          if (closed) return;
+          active = deps.runs.get(runId);
+        }
+
+        const queued: UnifiedStreamEvent[] = [];
+        let live = false;
+        let snapshot: UnifiedStreamEvent[] = [];
+        if (active) {
+          const subscription = deps.registry.subscribe(active.sessionId, (event) => {
+            if (live) sendEvent(event);
+            else queued.push(event);
+          });
+          if (subscription) {
+            snapshot = subscription.events;
+            unsubscribe = subscription.unsubscribe;
+          }
+        }
+
+        const stored = await deps.threads.readEvents(found.thread.id, runId);
+        if (closed) return;
+        for (const entry of stored) sendEvent(entry.event);
+        for (const event of snapshot) sendEvent(event);
+        live = true;
+        for (const event of queued) sendEvent(event);
+
+        if (active) await active.settled;
+        if (closed) return;
+        const latest = await deps.threads.findRun(runId);
+        if (!latest) return;
+        reply({
+          type: 'run.finished',
+          ...(requestId ? { requestId } : {}),
+          run: latest.run,
+        });
+      } finally {
+        socket.off('close', onClose);
+        unsubscribe();
+      }
     }
 
     async function cancelRun(message: Extract<WorkspaceClientMessage, { type: 'run.cancel' }>): Promise<void> {
@@ -765,6 +865,25 @@ function write(socket: WebSocket, payload: string): void {
   } catch {
     // The client went away.
   }
+}
+
+function trackedRun(runId: string, projectId: string, threadId: string): TrackedRun {
+  let resolved = false;
+  let mark = (): void => {};
+  const started = new Promise<void>((resolve) => {
+    mark = resolve;
+  });
+  return {
+    runId,
+    projectId,
+    threadId,
+    started,
+    markStarted() {
+      if (resolved) return;
+      resolved = true;
+      mark();
+    },
+  };
 }
 
 function requestIdOf(payload: unknown): string | undefined {

@@ -69,6 +69,7 @@ import {
   savePrefs,
   saveSession,
   type AutoAttachPrefs,
+  type OverlaySession,
 } from './prefs.js';
 import { SettingsModal } from './SettingsModal.js';
 import { SideDock } from './SideDock.js';
@@ -156,6 +157,7 @@ export function App({ config }: AppProps) {
   const [chat, dispatchChat] = useReducer(reduceChat, emptyChatState());
   const [sending, setSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(storedSession.threadId ?? null);
+  const [runId, setRunId] = useState<string | null>(storedSession.runId ?? null);
   const [summary, setSummary] = useState<GitDiffSummary | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -184,6 +186,10 @@ export function App({ config }: AppProps) {
   const composerEscape = useRef<() => boolean>(() => false);
   const hydratedThreadId = useRef<string | null>(null);
   const threadIdRef = useRef<string | null>(storedSession.threadId ?? null);
+  const runIdRef = useRef<string | null>(storedSession.runId ?? null);
+  const promptRef = useRef(storedSession.prompt ?? '');
+  const seenEventIds = useRef(new Set<string>());
+  const attachedRunId = useRef<string | null>(null);
   sideOpenRef.current = sideOpen;
   sideTabRef.current = sideTab;
   inspectingRef.current = inspecting;
@@ -195,6 +201,8 @@ export function App({ config }: AppProps) {
   sendingRef.current = sending;
   chatRef.current = chat;
   threadIdRef.current = threadId;
+  runIdRef.current = runId;
+  promptRef.current = prompt;
 
   const sheet = isSheetViewport(viewport.width);
   const compact = isCompactViewport(viewport.width);
@@ -203,6 +211,22 @@ export function App({ config }: AppProps) {
   const offset = pillOffset(pillCorner, sideOpen, bottomOpen, sideWidth, bottomHeight, sheet);
   const projectKey = config.projectId ?? 'default';
   const gatewayUrl = config.gatewayUrl ?? DEFAULT_GATEWAY_URL;
+
+  function rememberSession(patch: Partial<OverlaySession> = {}): void {
+    if (patch.prompt !== undefined) promptRef.current = patch.prompt;
+    if (patch.threadId !== undefined) threadIdRef.current = patch.threadId;
+    if (patch.runId !== undefined) runIdRef.current = patch.runId;
+    saveSession(projectKey, {
+      sideOpen: sideOpenRef.current,
+      sideTab: sideTabRef.current,
+      bottomOpen: bottomOpenRef.current,
+      bottomTab: bottomTabRef.current,
+      prompt: promptRef.current,
+      threadId: threadIdRef.current,
+      runId: runIdRef.current,
+      selectedLoc: selectedLocRef.current,
+    });
+  }
   const providerOptions = useMemo(
     () => buildProviderOptions(capabilities, availability),
     [capabilities, availability],
@@ -233,6 +257,42 @@ export function App({ config }: AppProps) {
       browserToken: config.browserToken,
     });
   }, [config.browserToken, config.projectId, config.workspace, gatewayUrl]);
+
+  function attachActiveRun(gatewayRunId: string): void {
+    if (attachedRunId.current === gatewayRunId) return;
+    attachedRunId.current = gatewayRunId;
+    const requestId = createId();
+    setSending(true);
+    sendingRef.current = true;
+    const offs: Array<() => void> = [];
+    const cleanup = (): void => {
+      for (const off of offs.splice(0)) off();
+      if (runCleanup.current === cleanup) runCleanup.current = null;
+    };
+    offs.push(
+      workspace.on('run.event', (message) => {
+        if (message.requestId !== requestId && message.runId !== gatewayRunId) return;
+        if (seenEventIds.current.has(message.event.id)) return;
+        seenEventIds.current.add(message.event.id);
+        applyRunEvent(gatewayRunId, gatewayRunId, message.event);
+      }),
+    );
+    offs.push(
+      workspace.on('run.finished', (message) => {
+        if (message.requestId !== requestId && message.run.id !== gatewayRunId) return;
+        cleanup();
+        attachedRunId.current = null;
+        setSending(false);
+        setRunId(null);
+        rememberSession({ runId: null });
+      }),
+    );
+    runCleanup.current = cleanup;
+    stopRun.current = () => {
+      workspace.send({ type: 'run.cancel', runId: gatewayRunId });
+    };
+    workspace.send({ type: 'run.attach', runId: gatewayRunId, requestId });
+  }
 
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const known = Object.keys(availability).length > 0;
@@ -505,18 +565,9 @@ export function App({ config }: AppProps) {
     setHistoryError(null);
     void workspace
       .request({ type: 'thread.list' })
-      .then(async (listed) => {
-        const rows: HistoryRow[] = await Promise.all(
-          listed.threads.map(async (thread) => {
-            try {
-              const detail = await workspace.request({ type: 'thread.get', threadId: thread.id });
-              return { thread, runCount: detail.runs.length };
-            } catch {
-              return { thread, runCount: 0 };
-            }
-          }),
-        );
-        if (!cancelled) setHistoryRows(rows);
+      .then((listed) => {
+        if (cancelled) return;
+        setHistoryRows(listed.threads.map((thread) => ({ thread, runCount: thread.runCount })));
       })
       .catch((error) => {
         if (!cancelled) setHistoryError(error instanceof Error ? error.message : 'Could not load history');
@@ -543,12 +594,32 @@ export function App({ config }: AppProps) {
         if (cancelled) return;
         hydratedThreadId.current = result.thread.id;
         dispatchChat({ type: 'hydrate', state: hydrateFromThread(result.runs, result.events) });
+        for (const entry of result.events) seenEventIds.current.add(entry.event.id);
+        const live = result.runs.filter((item) => item.status === 'running' || item.status === 'queued');
+        const active =
+          (runIdRef.current ? live.find((item) => item.id === runIdRef.current) : undefined) ?? live.at(-1);
+        if (active) {
+          setRunId(active.id);
+          rememberSession({ runId: active.id, threadId: result.thread.id });
+          attachActiveRun(active.id);
+        } else if (runIdRef.current) {
+          setRunId(null);
+          rememberSession({ runId: null });
+        }
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        if (cancelled) return;
+        if (error instanceof WorkspaceError && error.code === 'not_found') {
+          hydratedThreadId.current = null;
+          setThreadId(null);
+          setRunId(null);
+          rememberSession({ threadId: null, runId: null });
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [threadId, workspace]);
+  }, [threadId, workspace, connectionState]);
 
   useEffect(() => {
     savePrefs({
@@ -572,9 +643,10 @@ export function App({ config }: AppProps) {
       bottomTab,
       prompt,
       threadId,
+      runId,
       selectedLoc: selectedLocRef.current,
     });
-  }, [projectKey, sideOpen, sideTab, bottomOpen, bottomTab, prompt, threadId, selected]);
+  }, [projectKey, sideOpen, sideTab, bottomOpen, bottomTab, prompt, threadId, runId, selected]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -694,7 +766,11 @@ export function App({ config }: AppProps) {
     dispatchChat({ type: 'reset' });
     setPrompt('');
     setThreadId(null);
+    setRunId(null);
     hydratedThreadId.current = null;
+    attachedRunId.current = null;
+    seenEventIds.current.clear();
+    rememberSession({ prompt: '', threadId: null, runId: null });
     setHistoryOpen(false);
     setExcludedKinds([]);
     setChatUnread(false);
@@ -726,6 +802,8 @@ export function App({ config }: AppProps) {
       const result = await workspace.request({ type: 'thread.get', threadId: id });
       hydratedThreadId.current = result.thread.id;
       dispatchChat({ type: 'hydrate', state: hydrateFromThread(result.runs, result.events) });
+      seenEventIds.current.clear();
+      for (const entry of result.events) seenEventIds.current.add(entry.event.id);
       setThreadId(result.thread.id);
       setProvider(result.thread.provider);
       setModel(result.thread.model);
@@ -734,6 +812,16 @@ export function App({ config }: AppProps) {
       setHistoryOpen(false);
       setPrompt('');
       setChatUnread(false);
+      const live = result.runs.filter((item) => item.status === 'running' || item.status === 'queued');
+      const active = live.at(-1);
+      if (active) {
+        setRunId(active.id);
+        rememberSession({ prompt: '', threadId: result.thread.id, runId: active.id });
+        attachActiveRun(active.id);
+      } else {
+        setRunId(null);
+        rememberSession({ prompt: '', threadId: result.thread.id, runId: null });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not open that chat';
       setHistoryError(message);
@@ -892,6 +980,8 @@ export function App({ config }: AppProps) {
         void refreshDiffs();
       }
       setSending(false);
+      setRunId(null);
+      rememberSession({ runId: null });
     };
 
     const onStream = (event: UnifiedStreamEvent): void => {
@@ -907,6 +997,7 @@ export function App({ config }: AppProps) {
       }
       if (event.type === 'error') sawError = true;
       if (event.type === 'done') sawDone = true;
+      seenEventIds.current.add(event.id);
       applyRunEvent(localRunId, runId, event);
       if (event.type === 'done') finish();
     };
@@ -916,7 +1007,6 @@ export function App({ config }: AppProps) {
     const includeSelection = Boolean(selected) && !excluded.has('selection');
     const includeScreenshot = autoAttach.screenshot && !excluded.has('screenshot');
     const screenshotChip = attachedChips.find((chip) => chip.kind === 'screenshot');
-    setPrompt('');
     setSending(true);
     dispatchChat({ type: 'start', input: { userText: text, chips: attachedChips, runId: localRunId } });
 
@@ -972,6 +1062,13 @@ export function App({ config }: AppProps) {
       runId = accepted.runId;
       dispatchChat({ type: 'retarget', from: localRunId, to: accepted.runId });
       if (accepted.threadId) setThreadId(accepted.threadId);
+      setRunId(accepted.runId);
+      setPrompt('');
+      rememberSession({
+        prompt: '',
+        threadId: accepted.threadId || threadIdRef.current,
+        runId: accepted.runId,
+      });
       if (stopped) workspace.send({ type: 'run.cancel', runId: accepted.runId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Prompt failed';

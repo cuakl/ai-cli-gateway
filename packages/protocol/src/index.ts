@@ -150,6 +150,7 @@ export {
   TestReportSchema,
   TestStatusSchema,
   TestSummarySchema,
+  ThreadListItemSchema,
   WorkspaceClientMessageSchema,
   WorkspaceServerMessageSchema,
 } from './workspace.js';
@@ -164,6 +165,7 @@ export type {
   TestReport,
   TestStatus,
   TestSummary,
+  ThreadListItem,
   WorkspaceClientMessage,
   WorkspaceServerMessage,
 } from './workspace.js';
