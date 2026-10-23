@@ -36,6 +36,10 @@ const RunParamsSchema = z.object({
   runId: RunIdSchema,
 });
 
+const KeepBodySchema = z.object({
+  keep: z.boolean(),
+});
+
 export function threadVisible(principal: Principal, thread: Thread): boolean {
   if (principal.kind === 'machine') return true;
   if (principal.kind !== 'browser') return false;
@@ -52,7 +56,13 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ServerDeps): vo
         query.projectId = principal.projectId;
       }
       const threads = await deps.threads.listThreads(query);
-      return { threads };
+      const items = await Promise.all(
+        threads.map(async (thread) => {
+          const record = await deps.threads.getThread(thread.id);
+          return { ...thread, runCount: record?.runs.length ?? 0 };
+        }),
+      );
+      return { threads: items };
     } catch (error) {
       return sendFailure(reply, error);
     }
@@ -67,7 +77,37 @@ export function registerThreadRoutes(app: FastifyInstance, deps: ServerDeps): vo
         return reply.code(404).send({ error: 'not_found', message: `Thread ${id} was not found` });
       }
       if (!threadVisible(principal, record.thread)) return sendForbidden(reply);
+      const include = readInclude(request);
+      if (include === 'events') {
+        const events = await deps.threads.readEvents(id);
+        return { thread: record.thread, runs: record.runs, events };
+      }
       return { thread: record.thread, runs: record.runs };
+    } catch (error) {
+      return sendFailure(reply, error);
+    }
+  });
+
+  app.patch('/api/v1/threads/:id', async (request, reply) => {
+    try {
+      const principal = requirePrincipal(request);
+      const id = readThreadId(request);
+      const record = await deps.threads.getThread(id);
+      if (!record) {
+        return reply.code(404).send({ error: 'not_found', message: `Thread ${id} was not found` });
+      }
+      if (!threadVisible(principal, record.thread)) return sendForbidden(reply);
+      const body = KeepBodySchema.safeParse(request.body ?? {});
+      if (!body.success) {
+        const issue = body.error.issues[0];
+        throw new HttpError(
+          400,
+          'validation_error',
+          issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : 'Invalid body',
+        );
+      }
+      const thread = await deps.threads.updateThread(id, { keep: body.data.keep });
+      return { thread };
     } catch (error) {
       return sendFailure(reply, error);
     }
@@ -153,6 +193,13 @@ function readRunId(request: FastifyRequest): string {
   const parsed = RunParamsSchema.safeParse(request.params);
   if (!parsed.success) throw new HttpError(400, 'validation_error', 'A run id is required');
   return parsed.data.runId;
+}
+
+function readInclude(request: FastifyRequest): string | undefined {
+  const source = isRecord(request.query) ? request.query : {};
+  if (!present(source.include)) return undefined;
+  const value = first(source.include);
+  return typeof value === 'string' ? value : undefined;
 }
 
 function readRunFilter(request: FastifyRequest): string | undefined {

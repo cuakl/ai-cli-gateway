@@ -45,7 +45,7 @@ curl -s http://127.0.0.1:4100/api/v1/status \
   -H "authorization: Bearer $(cat ~/.aidev/token)"
 ```
 
-The status body includes `activeRuns`, `projects`, and `providers`. `GET /api/v1/providers` returns the same provider list under `providers`. Choose a provider whose `available` is `true`. `/health` also includes `availableProviders` when the same bearer token is sent, which is what the overlay polls.
+The status body includes `activeRuns`, `projects`, and `providers`. `GET /api/v1/providers` returns the same provider list under `providers`. `GET /api/v1/doctor` returns `{ version, providers }` with the same capability matrix `aidev doctor` prints. Choose a provider whose `available` is `true`. `/health` also includes `availableProviders` when the same bearer token is sent, which is what the overlay polls.
 
 ## Use the overlay
 
@@ -276,6 +276,21 @@ export default defineConfig({
 
 Native elements get `data-loc="relative/path.svelte:line:col"` from `svelte/compiler` parse offsets (1-based line and column). Components are not stamped.
 
+## Dashboard
+
+`aidev open` prints and opens `http://127.0.0.1:<port>/dashboard/#token=<machine token>`. The SPA reads the token from the hash, stores it in `sessionStorage`, and removes it from the address bar with `history.replaceState`. It never puts the token in a query string. `--print` prints the URL and does not open a browser.
+
+The gateway serves the built Preact app from `@aidev/dashboard` at `GET /dashboard/*` with no auth on the static files. API calls still use `Authorization: Bearer <token>`. `GET /` redirects to `/dashboard/`. If the dashboard has not been built, those routes return 404 with `pnpm --filter @aidev/dashboard build`.
+
+Pages:
+
+- **Providers** — capability matrix and doctor results (`GET /api/v1/status`, `GET /api/v1/doctor`).
+- **Projects** — registered roots, origins, and last activity.
+- **Threads** — overlay and API/inference threads, filterable by project and source. The detail view hydrates the overlay transcript from stored events. Keep (`PATCH /api/v1/threads/:id`) and Delete (`DELETE /api/v1/threads/:id`).
+- **Playground** — prompt, provider/model, optional JSON schema, streaming `POST /api/v1/infer`, and a copyable `curl` that uses `$AIDEV_TOKEN` instead of the real token.
+
+The dashboard is same-origin with the gateway, so CORS is not involved.
+
 ## Use it as an LLM API
 
 `POST /api/v1/infer` runs a signed-in CLI in **ask** mode (read-only) inside a fresh `$AIDEV_HOME/scratch/<runId>` directory. That directory is empty and is not a git repo. It is deleted after the run unless `"keep": true`. Nothing in your project is edited. Use this from another app when you want a completion without setting up provider API keys.
@@ -454,8 +469,9 @@ curl -s "http://127.0.0.1:4100/api/v1/threads?projectId=proj_…&source=api&limi
 
 | Method | Path | Result |
 | --- | --- | --- |
-| `GET` | `/api/v1/threads?projectId=&source=&limit=` | `{ threads }` newest first. A browser token is limited to its project. |
-| `GET` | `/api/v1/threads/:id` | `{ thread, runs }` |
+| `GET` | `/api/v1/threads?projectId=&source=&limit=` | `{ threads }` newest first, each with `runCount`. A browser token is limited to its project. |
+| `GET` | `/api/v1/threads/:id` | `{ thread, runs }`. Add `?include=events` for the JSONL log. |
+| `PATCH` | `/api/v1/threads/:id` | `{ thread }`. Body `{ keep: boolean }`. |
 | `POST` | `/api/v1/runs/:runId/restore` | Undo that run's files. Body `{ force?: boolean }`. |
 | `DELETE` | `/api/v1/threads/:id` | Cancels an active run, then deletes both files. |
 | `GET` | `/api/v1/threads/:id/events?runId=` | SSE. Replays stored `{ runId, event }` lines, follows the live run when it is still active, then closes. |
@@ -572,10 +588,10 @@ The `@aidev/gateway` package ships a `bin` named `aidev` (Node's `util.parseArgs
 | `aidev start [--port N] [--detach]` | Listen on loopback. `--detach` respawns itself, writes `$AIDEV_HOME/gateway.pid` with the child pid (before waiting for `/health`), and appends `$AIDEV_HOME/logs/gateway.log`. |
 | `aidev stop` | Signals the pid file and removes it. If the pid file is missing but `/health` on the configured port reports this gateway's version, calls `POST /api/v1/shutdown` with the machine token. |
 | `aidev status` | Calls `/health` and `/api/v1/status` with the machine token and prints projects, active runs, and providers. Does not need the pid file. |
-| `aidev doctor` | Prints each provider's availability, binary path, and `<bin> --version`. |
+| `aidev doctor` | Prints each provider's availability, binary path, and `<bin> --version`. The same matrix is `GET /api/v1/doctor`. |
 | `aidev init [--dry-run]` | Detects the package manager and Vite/Next/plain. For Vite, prints `<pm> add -D @aidev/vite` and edits `vite.config.*` when it can. For Next, prints `<pm> add -D @aidev/next`, layout instructions for `<AidevScript />`, and wraps a simple `next.config.*` object export. Never installs. |
 | `aidev projects add [dir] --origin <url>` | Registers the root (`.` when `dir` is omitted) and prints a script-tag snippet with a browser token. `--origin` is required and must be http(s) localhost / loopback / LAN. Persists the token in `$AIDEV_HOME/browser-tokens.json` (mode `0600`). |
-| `aidev open` | Prints `http://127.0.0.1:<port>/` and opens it. That page is a placeholder until the dashboard exists. |
+| `aidev open [--print]` | Prints `http://127.0.0.1:<port>/dashboard/#token=<machine token>` and opens it with `open` / `xdg-open` (`execFile` argv). `--print` skips the browser. |
 
 There is no API-key variable. Each CLI keeps its own login.
 

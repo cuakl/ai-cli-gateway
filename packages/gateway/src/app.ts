@@ -54,6 +54,11 @@ export interface BuildServerOptions {
    * Defaults to the `@aidev/overlay` build (404 if that file is missing).
    */
   overlayFile?: string;
+  /**
+   * Dashboard dist directory served at `GET /dashboard/*`. Tests pass a fixture.
+   * Defaults to the `@aidev/dashboard` build (404 if that directory is missing).
+   */
+  dashboardDir?: string;
 }
 
 /**
@@ -155,7 +160,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       }
       callback(null, deps.projects.allowsOrigin(origin) ? origin : false);
     },
-    methods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'accept'],
   });
   await app.register(websocket, {
@@ -163,7 +168,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   registerAuthGuard(app, deps);
-  registerDashboardRoutes(app);
+  registerDashboardRoutes(app, options.dashboardDir);
   registerOverlayRoutes(app, options.overlayFile);
   registerHealthRoutes(app, deps);
   registerStatusRoutes(app, deps);

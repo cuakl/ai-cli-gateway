@@ -1,0 +1,30 @@
+{
+  "name": "@aidev/dashboard",
+  "version": "0.0.1",
+  "description": "Local gateway dashboard: providers, projects, threads, and an inference playground",
+  "type": "module",
+  "exports": {
+    "./index.html": "./dist/index.html",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@aidev/protocol": "workspace:*",
+    "preact": "^10.26.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "happy-dom": "^17.6.3",
+    "typescript": "^5.9.2",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4"
+  }
+}

@@ -186,6 +186,26 @@ describe('thread HTTP, retention, and SSE', () => {
       expect(one.body.runs).toHaveLength(1);
       expect(isRecord(one.body.runs[0]) && one.body.runs[0].status).toBe('succeeded');
     }
+    if (isRecord(all.body) && Array.isArray(all.body.threads)) {
+      for (const item of all.body.threads) {
+        expect(isRecord(item) && typeof item.runCount === 'number').toBe(true);
+      }
+    }
+
+    const withEvents = await requestJson(
+      `${server.url}/api/v1/threads/${String(ephemeral?.id)}?include=events`,
+      { headers },
+    );
+    expect(withEvents.status).toBe(200);
+    expect(isRecord(withEvents.body) && Array.isArray(withEvents.body.events)).toBe(true);
+
+    const keptPatch = await requestJson(`${server.url}/api/v1/threads/${String(ephemeral?.id)}`, {
+      headers: { ...headers, 'content-type': 'application/json' },
+      method: 'PATCH',
+      body: JSON.stringify({ keep: true }),
+    });
+    expect(keptPatch.status).toBe(200);
+    expect(isRecord(keptPatch.body) && isRecord(keptPatch.body.thread) && keptPatch.body.thread.keep).toBe(true);
   });
 
   it('reloads threads and events after a buildServer restart', async () => {

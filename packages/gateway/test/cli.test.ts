@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { run } from '../src/cli.js';
+import { run, setOpenUrlHook } from '../src/cli.js';
 import { ensureHome, readConfig, writeConfig } from '../src/home.js';
 import { GATEWAY_VERSION } from '../src/version.js';
 import { startTestServer } from './helpers.js';
@@ -15,6 +15,7 @@ const dirs: string[] = [];
 
 describe('aidev cli', () => {
   afterEach(async () => {
+    setOpenUrlHook(null);
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -27,6 +28,43 @@ describe('aidev cli', () => {
     expect(code).toBe(0);
     expect(lines.join('\n')).toContain('projects add');
     expect(lines.join('\n')).toContain('init [--dry-run]');
+    expect(lines.join('\n')).toContain('open [--print]');
+  });
+
+  it('prints the dashboard hash URL with --print and does not open a browser', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'aidev-open-print-'));
+    dirs.push(home);
+    const { token, config } = await ensureHome(home);
+    const launches: Array<{ command: string; args: readonly string[] }> = [];
+    setOpenUrlHook((command, args) => {
+      launches.push({ command, args });
+    });
+    const lines: string[] = [];
+    const code = await run(['open', '--print'], { ...process.env, AIDEV_HOME: home }, capture(lines));
+    expect(code).toBe(0);
+    const url = lines.join('\n').trim();
+    expect(url).toBe(`http://127.0.0.1:${config.port ?? 4100}/dashboard/#token=${encodeURIComponent(token)}`);
+    expect(url).toContain('/dashboard/#token=');
+    expect(url).not.toContain('?token=');
+    expect(launches).toEqual([]);
+  });
+
+  it('opens the dashboard with open/xdg-open argv', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'aidev-open-launch-'));
+    dirs.push(home);
+    const { token, config } = await ensureHome(home);
+    const launches: Array<{ command: string; args: readonly string[] }> = [];
+    setOpenUrlHook((command, args) => {
+      launches.push({ command, args });
+    });
+    const lines: string[] = [];
+    const code = await run(['open'], { ...process.env, AIDEV_HOME: home }, capture(lines));
+    expect(code).toBe(0);
+    const url = `http://127.0.0.1:${config.port ?? 4100}/dashboard/#token=${encodeURIComponent(token)}`;
+    expect(lines.join('\n').trim()).toBe(url);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.args).toEqual([url]);
+    expect(['open', 'xdg-open', 'cmd']).toContain(launches[0]?.command);
   });
 
   it('writes a project into config when no gateway is listening for this home', async () => {

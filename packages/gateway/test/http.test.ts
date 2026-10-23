@@ -70,6 +70,17 @@ describe('GET /health and GET /api/v1/providers', () => {
     expect(listed.body.providers).toEqual(health.body.availableProviders);
   });
 
+  it('returns the capability matrix from GET /api/v1/doctor', async () => {
+    const doctor = await requestJson(`${url}/api/v1/doctor`);
+    const status = await requestJson(`${url}/api/v1/status`);
+    expect(doctor.status).toBe(200);
+    expect(isRecord(doctor.body)).toBe(true);
+    expect(isRecord(status.body)).toBe(true);
+    if (!isRecord(doctor.body) || !isRecord(status.body)) return;
+    expect(typeof doctor.body.version).toBe('string');
+    expect(doctor.body.providers).toEqual(status.body.providers);
+  });
+
   it('reflects a registered origin and omits ACAO for any other', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'gateway-cors-'));
     try {

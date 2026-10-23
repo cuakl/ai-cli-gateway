@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ const USAGE = `Usage: ${CLI_NAME} <command>
   init [--dry-run]              Detect the app and print or apply setup. Never installs.
   projects add [dir] --origin <url>
                                 Register a project and print a script-tag snippet.
-  open                          Print and open the dashboard URL.
+  open [--print]                 Print the dashboard URL. Opens a browser unless --print.
 `;
 
 export interface CliIo {
@@ -58,6 +58,7 @@ export async function run(
       origin: { type: 'string' },
       live: { type: 'boolean', default: false },
       'dry-run': { type: 'boolean', default: false },
+      print: { type: 'boolean', default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -76,7 +77,7 @@ export async function run(
     case 'projects':
       return commandProjects(positionals, values.origin, env, io, cwd);
     case 'open':
-      return commandOpen(env, io);
+      return commandOpen(env, io, values.print === true);
     default:
       io.stderr(`Unknown command "${command}"\n\n${USAGE.trimEnd()}`);
       return 1;
@@ -453,32 +454,43 @@ async function commandProjects(
   return 0;
 }
 
-async function commandOpen(env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
+export type OpenUrlLaunch = (command: string, args: readonly string[]) => void;
+
+let testOpenUrl: OpenUrlLaunch | undefined;
+
+/** Tests replace `open` / `xdg-open` so a real browser is never launched. */
+export function setOpenUrlHook(hook: OpenUrlLaunch | null): void {
+  testOpenUrl = hook ?? undefined;
+}
+
+export function browserLaunch(url: string, platform = process.platform): { command: string; args: string[] } {
+  if (platform === 'darwin') return { command: 'open', args: [url] };
+  if (platform === 'win32') return { command: 'cmd', args: ['/c', 'start', '', url] };
+  return { command: 'xdg-open', args: [url] };
+}
+
+async function commandOpen(env: NodeJS.ProcessEnv, io: CliIo, printOnly: boolean): Promise<number> {
   const home = resolveAidevHome(env);
-  let port = 4100;
-  try {
-    const config = await readConfig(home);
-    if (config.port) port = config.port;
-  } catch {
-    // The default port is used when the home directory does not exist yet.
-  }
-  const url = `http://127.0.0.1:${port}/`;
+  const ensured = await ensureHome(home);
+  const port = ensured.config.port ?? 4100;
+  const url = `http://127.0.0.1:${port}/dashboard/#token=${encodeURIComponent(ensured.token)}`;
   io.stdout(url);
-  openUrl(url);
+  if (!printOnly) openUrl(url);
   return 0;
 }
 
 function openUrl(url: string): void {
-  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-  let child: ChildProcess;
+  const { command, args } = browserLaunch(url);
+  const launch = testOpenUrl ?? defaultOpenUrl;
   try {
-    child = spawn(command, args, { stdio: 'ignore', detached: true });
+    launch(command, args);
   } catch {
-    return;
+    // Opening a browser is best-effort; the URL was already printed.
   }
-  child.on('error', () => undefined);
-  child.unref();
+}
+
+function defaultOpenUrl(command: string, args: readonly string[]): void {
+  execFile(command, [...args], () => undefined);
 }
 
 function readPort(value: string): number {

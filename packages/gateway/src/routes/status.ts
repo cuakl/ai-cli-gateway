@@ -23,4 +23,10 @@ export function registerStatusRoutes(app: FastifyInstance, deps: ServerDeps): vo
       providers,
     };
   });
+
+  app.get('/api/v1/doctor', async (request) => {
+    requirePrincipal(request);
+    const providers = await deps.runtime.listCapabilities();
+    return { version: GATEWAY_VERSION, providers };
+  });
 }
