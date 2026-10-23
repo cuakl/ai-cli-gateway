@@ -165,12 +165,9 @@ function printScriptTagInstructions(framework: 'next' | 'plain', io: InitIo): vo
   io.stdout('  npx aidev start');
   io.stdout(`  npx aidev projects add . --origin ${origin}`);
   io.stdout('');
-  io.stdout('Then add this to the document <head> (a Next.js App Router layout works):');
-  io.stdout('');
-  io.stdout('<script>');
-  io.stdout(`  globalThis.__AI_DEVTOOLS__ = { gatewayUrl: '${DEFAULT_GATEWAY}' };`);
-  io.stdout('</script>');
-  io.stdout(`<script src="${DEFAULT_GATEWAY}/overlay.js"></script>`);
+  io.stdout('Paste the snippet that command prints into the document <head>.');
+  io.stdout('It sets window.__AI_DEVTOOLS__ (gateway URL, project id, browser token, name)');
+  io.stdout(`and loads ${DEFAULT_GATEWAY}/overlay.js. The token is project-scoped and for local development only.`);
 }
 
 function frameworkLabel(framework: Framework): string {

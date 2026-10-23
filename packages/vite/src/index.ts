@@ -12,6 +12,7 @@ import { injectDataLoc } from './jsx-transform.js';
 import { overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
 import { placeBeforeJsxCompilers } from './plugin-order.js';
 import { readMachineToken, registerProject, type RegisteredProject } from './register-project.js';
+import { createVueDataLocTransform, type VueNodeTransform } from './vue-transform.js';
 
 export { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE };
 export { DEFAULT_GATEWAY_URL } from './companion.js';
@@ -19,8 +20,12 @@ export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 export { EARLY_ERROR_SCRIPT } from './early-errors.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
+export { aidevSveltePreprocess } from './svelte-preprocess.js';
+export type { AidevMarkupPreprocessor, AidevSveltePreprocessOptions } from './svelte-preprocess.js';
+export { createVueDataLocTransform } from './vue-transform.js';
+export type { VueNodeTransform } from './vue-transform.js';
 
-/** Dev-server route the overlay hits after the gateway forgets a browser token. */
+/** Dev-server route the overlay hits after a project-socket auth failure. */
 export const CONFIG_PATH = '/@ai-devtools/config';
 
 export interface DevtoolsPluginOptions {
@@ -38,6 +43,15 @@ export interface DevtoolsPluginOptions {
    * When this is false, or the spawn fails, the plugin logs `npx aidev start`.
    */
   autoStart?: boolean;
+  /**
+   * `'vue'` returns a template `nodeTransform` instead of a Vite plugin.
+   * Pass it to `@vitejs/plugin-vue` `template.compilerOptions.nodeTransforms`.
+   * There is no plugin-level hook into Vue's compiler; keep `aiDevtools()` as well
+   * for overlay injection. Svelte uses `aidevSveltePreprocess()`.
+   */
+  framework?: 'react' | 'vue';
+  /** Project root for Vue `data-loc` paths. Defaults to `process.cwd()`. */
+  root?: string;
 }
 
 export interface InjectedDevtoolsConfig {
@@ -50,8 +64,23 @@ export interface InjectedDevtoolsConfig {
 /**
  * Inject the DevTools overlay, stamp JSX with source locations, register the
  * project with the gateway, and hold full reloads while a run is active.
+ *
+ * `aiDevtools({ framework: 'vue' })` returns a Vue `nodeTransform` — there is
+ * no hook that lets this plugin inject into `@vitejs/plugin-vue` on its own.
  */
-export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
+export function aiDevtools(options: DevtoolsPluginOptions & { framework: 'vue' }): VueNodeTransform;
+export function aiDevtools(options?: DevtoolsPluginOptions): Plugin;
+export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin | VueNodeTransform {
+  if (options.framework === 'vue') {
+    return createVueDataLocTransform({
+      ...(options.root !== undefined ? { root: options.root } : {}),
+      ...(options.injectDataLoc !== undefined ? { injectDataLoc: options.injectDataLoc } : {}),
+    });
+  }
+  return createDevtoolsPlugin(options);
+}
+
+function createDevtoolsPlugin(options: DevtoolsPluginOptions): Plugin {
   let command: 'build' | 'serve' = 'serve';
   let root = process.cwd();
   let publicPath = overlayPublicPath('/');

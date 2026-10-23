@@ -11,7 +11,9 @@ import { startServer } from './app.js';
 import { CLI_NAME } from './brand.js';
 import { ensureHome, readConfig, readMachineToken, resolveAidevHome, writeConfig } from './home.js';
 import { runInit } from './init.js';
+import { parseDevOrigin } from './projects/origin.js';
 import { ProjectRegistry } from './projects/registry.js';
+import { formatScriptTagSnippet, projectNameOf } from './projects/script-tag.js';
 import { GATEWAY_VERSION } from './version.js';
 
 const USAGE = `Usage: ${CLI_NAME} <command>
@@ -21,8 +23,8 @@ const USAGE = `Usage: ${CLI_NAME} <command>
   status                        Print health, projects, and active runs.
   doctor [--live]               Print provider capabilities. --live asks each CLI to reply OK.
   init [--dry-run]              Detect the app and print or apply setup. Never installs.
-  projects add <path> [--origin URL]
-                                Register a project root.
+  projects add [dir] --origin <url>
+                                Register a project and print a script-tag snippet.
   open                          Print and open the dashboard URL.
 `;
 
@@ -72,7 +74,7 @@ export async function run(
     case 'init':
       return runInit(cwd, values['dry-run'] === true, io);
     case 'projects':
-      return commandProjects(positionals, values.origin, env, io);
+      return commandProjects(positionals, values.origin, env, io, cwd);
     case 'open':
       return commandOpen(env, io);
     default:
@@ -380,18 +382,28 @@ async function commandProjects(
   origin: string | undefined,
   env: NodeJS.ProcessEnv,
   io: CliIo,
+  cwd: string,
 ): Promise<number> {
-  if (positionals[0] !== 'add' || !positionals[1]) {
-    throw new Error(`Usage: ${CLI_NAME} projects add <path> [--origin URL]`);
+  if (positionals[0] !== 'add') {
+    throw new Error(`Usage: ${CLI_NAME} projects add [dir] --origin <url>`);
   }
-  const root = path.resolve(positionals[1]);
+  if (!origin) {
+    throw new Error(`--origin is required for script-tag install.\nUsage: ${CLI_NAME} projects add [dir] --origin <url>`);
+  }
+  const registeredOrigin = parseDevOrigin(origin);
+  const root = path.resolve(cwd, positionals[1] ?? cwd);
   const home = resolveAidevHome(env);
   const ensured = await ensureHome(home);
   const port = ensured.config.port ?? 4100;
-  const base = `http://127.0.0.1:${port}`;
-  const registeredOrigin = origin ?? `http://127.0.0.1:${port}`;
-  if (await waitForHealth(`${base}/health`, 400)) {
-    const response = await fetch(`${base}/api/v1/projects/register`, {
+  const gatewayUrl = `http://127.0.0.1:${port}`;
+  const projectName = await projectNameOf(root);
+
+  let projectId = '';
+  let browserToken = '';
+  let gatewayUp = false;
+
+  if (await waitForHealth(`${gatewayUrl}/health`, 400)) {
+    const response = await fetch(`${gatewayUrl}/api/v1/projects/register`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -400,20 +412,44 @@ async function commandProjects(
       body: JSON.stringify({ root, origin: registeredOrigin }),
     });
     if (response.ok) {
-      const body = (await response.json()) as { projectId?: string };
-      io.stdout(`registered ${body.projectId ?? ''}`);
-      io.stdout(root);
-      return 0;
-    }
-    if (response.status !== 401) {
+      const body = (await response.json()) as { projectId?: string; browserToken?: string };
+      if (typeof body.projectId === 'string' && typeof body.browserToken === 'string') {
+        projectId = body.projectId;
+        browserToken = body.browserToken;
+        gatewayUp = true;
+      }
+    } else if (response.status !== 401) {
       throw new Error((await response.text()) || `register failed (${response.status})`);
     }
   }
-  const registry = new ProjectRegistry(home);
-  await registry.load();
-  const { project } = await registry.register({ root, origin: registeredOrigin });
-  io.stdout(`registered ${project.id}`);
-  io.stdout(`${root} (gateway is not running; a browser token is issued when it starts and the dev server registers)`);
+
+  if (!projectId || !browserToken) {
+    const registry = new ProjectRegistry(home);
+    await registry.load();
+    const { project, browserToken: token } = await registry.register({
+      root,
+      origin: registeredOrigin,
+    });
+    projectId = project.id;
+    browserToken = token;
+  }
+
+  io.stdout(
+    formatScriptTagSnippet({
+      gatewayUrl,
+      projectId,
+      browserToken,
+      projectName,
+    }),
+  );
+  io.stderr(`registered ${projectId}`);
+  io.stderr(root);
+  io.stderr(
+    'The browser token is project-scoped and for local development only. Do not commit it or ship it in production.',
+  );
+  if (!gatewayUp) {
+    io.stderr('Gateway is not running. Start it with: npx aidev start');
+  }
   return 0;
 }
 

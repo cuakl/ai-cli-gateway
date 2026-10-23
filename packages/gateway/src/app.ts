@@ -11,6 +11,7 @@ import { ensureHome, readConfig, resolveAidevHome } from './home.js';
 import { ProjectRegistry } from './projects/registry.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerOverlayRoutes } from './routes/overlay.js';
 import { registerInferRoutes } from './routes/infer.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerPromptRoutes } from './routes/prompt.js';
@@ -48,6 +49,11 @@ export interface BuildServerOptions {
   home?: string;
   /** Bind address recorded for the loopback PTY check. */
   host?: string;
+  /**
+   * Overlay IIFE to serve at `GET /overlay.js`. Tests pass a fixture.
+   * Defaults to the `@aidev/overlay` build (404 if that file is missing).
+   */
+  overlayFile?: string;
 }
 
 /**
@@ -158,6 +164,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 
   registerAuthGuard(app, deps);
   registerDashboardRoutes(app);
+  registerOverlayRoutes(app, options.overlayFile);
   registerHealthRoutes(app, deps);
   registerStatusRoutes(app, deps);
   registerShutdownRoutes(app);

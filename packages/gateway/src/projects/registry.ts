@@ -2,7 +2,10 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { Project } from '@aidev/protocol';
-import { readConfig, writeConfig, generateToken } from '../home.js';
+import { generateToken, readConfig, writeConfig, writeSecretFile } from '../home.js';
+
+/** Project-scoped browser tokens, mode 0600, so script-tag snippets survive a restart. */
+export const BROWSER_TOKENS_FILENAME = 'browser-tokens.json';
 
 export function projectIdFor(root: string): string {
   return createHash('sha256').update(root).digest('hex');
@@ -22,7 +25,8 @@ interface BrowserGrant {
 
 /**
  * Registered project roots (persisted in config.json) and browser tokens
- * (memory only; the dev server asks again after a restart).
+ * (`AIDEV_HOME/browser-tokens.json`, mode 0600). Tokens are also kept in
+ * memory so a grant can be checked without a disk read.
  */
 export class ProjectRegistry {
   private readonly projects = new Map<string, Project>();
@@ -38,6 +42,7 @@ export class ProjectRegistry {
     for (const project of config.projects ?? []) {
       this.projects.set(project.id, project);
     }
+    await this.loadBrowserTokens();
   }
 
   list(): Project[] {
@@ -71,7 +76,8 @@ export class ProjectRegistry {
 
   /**
    * Register `root` (realpath) and optionally add `origin` to its allowlist.
-   * The same root always yields the same project id and, in this process, the same browser token.
+   * The same root always yields the same project id and the same browser token
+   * (in this process and after a restart, from browser-tokens.json).
    */
   async register(input: {
     root: string;
@@ -105,12 +111,47 @@ export class ProjectRegistry {
       allowRemoteShell: input.allowRemoteShell ?? previous?.allowRemoteShell ?? false,
     });
     await this.persist();
+    await this.persistBrowserTokens();
     return { project, browserToken };
   }
 
   private async persist(): Promise<void> {
     const config = await readConfig(this.home);
     await writeConfig(this.home, { ...config, projects: this.list() });
+  }
+
+  private async loadBrowserTokens(): Promise<void> {
+    this.grants.clear();
+    this.tokenByProject.clear();
+    let raw = '';
+    try {
+      raw = await readFile(path.join(this.home, BROWSER_TOKENS_FILENAME), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    for (const [projectId, token] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!this.projects.has(projectId)) continue;
+      if (typeof token !== 'string' || !token.trim()) continue;
+      const value = token.trim();
+      this.tokenByProject.set(projectId, value);
+      this.grants.set(value, { projectId, allowRemoteShell: false });
+    }
+  }
+
+  private async persistBrowserTokens(): Promise<void> {
+    const tokens: Record<string, string> = {};
+    for (const [projectId, token] of this.tokenByProject) {
+      if (this.projects.has(projectId)) tokens[projectId] = token;
+    }
+    await writeSecretFile(this.home, BROWSER_TOKENS_FILENAME, `${JSON.stringify(tokens, null, 2)}\n`);
   }
 }
 

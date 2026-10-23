@@ -4,6 +4,7 @@ import type { NodePath } from '@babel/traverse';
 import { isJSXIdentifier, type JSXOpeningElement } from '@babel/types';
 import MagicString from 'magic-string';
 import path from 'node:path';
+import { escapeAttr, filePathFromId, isIgnoredId, isNodeModules, toProjectPath } from './loc-path.js';
 
 export interface DataLocResult {
   code: string;
@@ -81,26 +82,6 @@ export function injectDataLoc(code: string, id: string, rootDir: string): DataLo
   };
 }
 
-function isIgnoredId(id: string): boolean {
-  return id.includes('\0') || id.startsWith('virtual:') || id.includes('/virtual:');
-}
-
-function filePathFromId(id: string): string {
-  const withoutQuery = id.split('?')[0] ?? id;
-  return withoutQuery.split('#')[0] ?? withoutQuery;
-}
-
-function isNodeModules(filePath: string): boolean {
-  return filePath.split(/[/\\]/).includes('node_modules');
-}
-
-function toProjectPath(filePath: string, rootDir: string): string {
-  const absolute = path.isAbsolute(filePath) ? filePath : path.resolve(rootDir, filePath);
-  const relative = path.relative(rootDir, absolute);
-  const normalized = relative.split(path.sep).join('/');
-  return normalized === '' ? path.basename(filePath) : normalized;
-}
-
 function hasExplicitDataLoc(opening: JSXOpeningElement): boolean {
   return opening.attributes.some((attribute) => {
     if (attribute.type !== 'JSXAttribute') return false;
@@ -130,6 +111,3 @@ function insertionOffset(opening: JSXOpeningElement): number | null {
   return anchor ?? null;
 }
 
-function escapeAttr(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-}

@@ -131,7 +131,7 @@ If the config has no `plugins: [` array, or the app is Next.js / not Vite, `aide
 
 ### Script tag (Next.js and other non-Vite apps)
 
-Start the gateway, register the app origin, and load the overlay IIFE the gateway serves at `/overlay.js`:
+`--origin` is required. It must be `http` or `https` on localhost, `127.0.0.1`, or a private LAN address. That origin is added to the project's CORS allowlist. The command registers the directory (defaults to `.`) and prints a snippet that includes a project-scoped browser token:
 
 ```bash
 npx aidev start
@@ -140,19 +140,23 @@ npx aidev projects add . --origin http://localhost:3000
 
 ```html
 <script>
-  globalThis.__AI_DEVTOOLS__ = { gatewayUrl: 'http://127.0.0.1:4100' };
+  window.__AI_DEVTOOLS__ = { gatewayUrl, projectId, browserToken, projectName };
 </script>
-<script src="http://127.0.0.1:4100/overlay.js"></script>
+<script src="http://127.0.0.1:4100/overlay.js" defer></script>
 ```
 
-Put that in the document `<head>` (a Next.js App Router root layout works). Register the origin your dev server actually uses. Component names come from React Fiber when it is present; otherwise the inspector shows the DOM path and `data-loc` is absent.
+Paste the printed snippet into the document `<head>` (a Next.js App Router root layout works). Use the origin your dev server actually listens on. The token is for local development only — do not commit it or ship it in production. Tokens are stored in `$AIDEV_HOME/browser-tokens.json` (mode `0600`) so the same snippet still works after `aidev` restarts.
+
+`GET /overlay.js` is public (static code, no auth). If that file 404s, build `@aidev/overlay` and restart the gateway.
+
+Component names come from React Fiber when it is present; otherwise the inspector shows the DOM path and `data-loc` is absent unless you add Vue or Svelte stamping (below).
 
 ### What the plugin does
 
 During `serve` the plugin does four things:
 
 1. Injects a config script and `<script type="module" src="/@ai-devtools/overlay.js">` into `<head>`. The config is `globalThis.__AI_DEVTOOLS__` with `gatewayUrl`, `projectId`, `browserToken`, and `projectName` (the `name` from `package.json` when it has one).
-2. Serves the overlay bundle from `@aidev/overlay`, and `GET /@ai-devtools/config`, which registers again and returns a fresh browser token. The overlay calls that after the project socket closes on an auth failure, because a gateway restart drops in-memory browser tokens.
+2. Serves the overlay bundle from `@aidev/overlay`, and `GET /@ai-devtools/config`, which registers again and returns the project's browser token (reused from `$AIDEV_HOME/browser-tokens.json` after a gateway restart). The overlay calls that after the project socket closes on an auth failure.
 3. Writes `data-loc` onto JSX elements that do not already have one. The column is Babel's 0-based column.
 4. Connects to the project WebSocket with the machine token, listens for `project.activity`, and holds Vite `full-reload` messages while `activeRuns > 0`. One reload is sent 250ms after the count returns to 0. Module hot updates still apply as files change. If the gateway drops, that socket reconnects with backoff.
 
@@ -164,8 +168,60 @@ During `serve` the plugin does four things:
 | `enabled` | `true` while serving, `false` for builds | Turns injection, registration, and the reload hold off. |
 | `injectDataLoc` | `true` | Turns the JSX source stamp off. |
 | `autoStart` | `true` | When `/health` fails, spawn `aidev start --detach` and poll for 5 seconds. `false` logs `npx aidev start` instead of spawning. |
+| `framework` | `'react'` | `'vue'` returns a template `nodeTransform` instead of a Vite plugin (see Vue below). |
+| `root` | `process.cwd()` | Project root used for Vue `data-loc` paths. |
 
-The file watcher waits briefly for a write to finish. The first start creates `~/.aidev` (`AIDEV_HOME` overrides that directory), a mode `0600` machine token, and `config.json`. Register a repo with `aidev projects add <path>`, or set `GATEWAY_ROOT` to auto-register one root at startup. The Vite plugin registers the project it is serving and injects a project-scoped browser token. A prompt `cwd` must resolve inside a registered project. A symlink whose target leaves that project is rejected.
+The file watcher waits briefly for a write to finish. The first start creates `~/.aidev` (`AIDEV_HOME` overrides that directory), a mode `0600` machine token, and `config.json`. Register a repo with `aidev projects add <path> --origin <url>`, or set `GATEWAY_ROOT` to auto-register one root at startup. The Vite plugin registers the project it is serving and injects a project-scoped browser token. A prompt `cwd` must resolve inside a registered project. A symlink whose target leaves that project is rejected.
+
+### Vue
+
+`@vitejs/plugin-vue` compiles templates itself, so this plugin cannot inject a transform from the Vite plugin list. `aiDevtools({ framework: 'vue' })` returns a `compilerOptions.nodeTransforms` function. Pass it into plugin-vue and keep `aiDevtools()` for overlay injection. `@vue/compiler-sfc` is an optional peer; install it with Vue.
+
+```ts
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import { aiDevtools } from '@aidev/vite';
+
+export default defineConfig({
+  plugins: [
+    vue({
+      template: {
+        compilerOptions: {
+          nodeTransforms: [aiDevtools({ framework: 'vue' })],
+        },
+      },
+    }),
+    aiDevtools(),
+  ],
+});
+```
+
+Native elements get `data-loc="relative/path.vue:line:col"` (Vue's 1-based `loc.start`). Components are not stamped.
+
+### Svelte
+
+Use `aidevSveltePreprocess()` in `svelte.config.js` (or the `preprocess` option of `@sveltejs/vite-plugin-svelte`). `svelte` is an optional peer. Keep `aiDevtools()` in `vite.config` for overlay injection.
+
+```js
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+import { aidevSveltePreprocess } from '@aidev/vite';
+
+export default {
+  preprocess: [aidevSveltePreprocess(), vitePreprocess()],
+};
+```
+
+```ts
+import { defineConfig } from 'vite';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { aiDevtools } from '@aidev/vite';
+
+export default defineConfig({
+  plugins: [svelte(), aiDevtools()],
+});
+```
+
+Native elements get `data-loc="relative/path.svelte:line:col"` from `svelte/compiler` parse offsets (1-based line and column). Components are not stamped.
 
 ## Use it as an LLM API
 
@@ -465,7 +521,7 @@ The `@aidev/gateway` package ships a `bin` named `aidev` (Node's `util.parseArgs
 | `aidev status` | Calls `/health` and `/api/v1/status` with the machine token and prints projects, active runs, and providers. Does not need the pid file. |
 | `aidev doctor` | Prints each provider's availability, binary path, and `<bin> --version`. |
 | `aidev init [--dry-run]` | Detects the package manager and Vite/Next/plain. For Vite, prints `<pm> add -D @aidev/vite` and edits `vite.config.*` when it can. Never installs. |
-| `aidev projects add <path> [--origin URL]` | Registers the root over HTTP when the gateway is up, otherwise writes it into `config.json`. |
+| `aidev projects add [dir] --origin <url>` | Registers the root (`.` when `dir` is omitted) and prints a script-tag snippet with a browser token. `--origin` is required and must be http(s) localhost / loopback / LAN. Persists the token in `$AIDEV_HOME/browser-tokens.json` (mode `0600`). |
 | `aidev open` | Prints `http://127.0.0.1:<port>/` and opens it. That page is a placeholder until the dashboard exists. |
 
 There is no API-key variable. Each CLI keeps its own login.
@@ -477,7 +533,7 @@ There is no API-key variable. Each CLI keeps its own login.
 - **Loopback.** The default bind is `127.0.0.1`. Set `HOST` only when you intend the port to be reachable from somewhere else.
 - **Machine token.** The first start writes `~/.aidev/token` (mode `0600`, 32 random bytes, base64url). Every `/api/v1/*` route and every WebSocket requires `Authorization: Bearer <token>` or `?token=`. `GET /health` stays open and returns only `{ status, version }`. `POST /api/v1/shutdown` accepts only the machine token; browser and inference tokens get 403.
 - **Inference tokens.** `POST /api/v1/infer` and `/v1/*` also accept a token listed in `config.json` `inferenceTokens`. Browser tokens are rejected on those routes.
-- **Browser tokens.** `POST /api/v1/projects/register` (machine token) takes `{ root, origin }` and returns `{ projectId, browserToken }`. The browser token lives in memory, is scoped to that project, and is re-issued when the dev server registers again after a restart. Re-registering the same root keeps the project id and may add an origin.
+- **Browser tokens.** `POST /api/v1/projects/register` (machine token) takes `{ root, origin }` and returns `{ projectId, browserToken }`. The token is scoped to that project and stored in `$AIDEV_HOME/browser-tokens.json` (mode `0600`) so a script-tag snippet survives a gateway restart. Re-registering the same root keeps the project id and the same token, and may add an origin. The Vite plugin still re-registers on start.
 - **CORS.** `Access-Control-Allow-Origin` is set only for origins registered by a project (and the gateway's own origin after it binds). Any other `Origin`, including `https://evil.example`, gets no CORS header. Requests with no `Origin` (curl, Node) are allowed when the token is valid. A WebSocket upgrade with a non-allowlisted `Origin` is rejected.
 - **Project roots.** A machine token may use a `cwd` inside any registered project. A browser token may use only its own. Paths are realpath-checked, including symlinks. `GATEWAY_ROOT` only auto-registers that one root; it is not an implicit allow-all.
 - **Git.** Diff paths are canonicalized and confined to the project. An untracked symlink is shown as a symlink; its target is not read. Discard deletes only the untracked paths that were explicitly listed.

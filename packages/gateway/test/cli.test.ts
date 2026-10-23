@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -35,15 +35,70 @@ describe('aidev cli', () => {
     dirs.push(home, root);
     await ensureHome(home);
     await writeConfig(home, { ...(await readConfig(home)), port: 9 });
-    const lines: string[] = [];
-    const code = await run(['projects', 'add', root], { ...process.env, AIDEV_HOME: home }, {
-      stdout: (line) => lines.push(line),
-      stderr: (line) => lines.push(line),
-    });
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await run(
+      ['projects', 'add', root, '--origin', 'http://localhost:5173'],
+      { ...process.env, AIDEV_HOME: home },
+      {
+        stdout: (line) => out.push(line),
+        stderr: (line) => err.push(line),
+      },
+    );
     expect(code).toBe(0);
-    expect(lines[0]).toMatch(/^registered [0-9a-f]+/);
+    const snippet = out.join('\n');
+    expect(snippet).toContain('window.__AI_DEVTOOLS__');
+    expect(snippet).toContain("src=\"http://127.0.0.1:9/overlay.js\" defer");
+    expect(snippet).toMatch(/"browserToken":"[A-Za-z0-9_-]+"/);
+    expect(snippet).toMatch(/"projectId":"[0-9a-f]+"/);
+    expect(err.join('\n')).toMatch(/registered [0-9a-f]+/);
+    expect(err.join('\n')).toMatch(/project-scoped and for local development only/);
     const config = await readConfig(home);
     expect(config.projects?.[0]?.root).toBe(await realpath(root));
+    expect(config.projects?.[0]?.origins).toEqual(['http://localhost:5173']);
+    const tokenFile = path.join(home, 'browser-tokens.json');
+    const info = await stat(tokenFile);
+    expect(info.mode & 0o777).toBe(0o600);
+  });
+
+  it('prints a snippet from a running gateway and requires a local origin', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'aidev-cli-live-'));
+    const root = await mkdtemp(path.join(tmpdir(), 'aidev-cli-live-root-'));
+    dirs.push(home, root);
+    const server = await startTestServer({ home, registerDefaultRoot: false, authenticateFetch: false });
+    const address = server.app.server.address();
+    if (!address || typeof address === 'string') throw new Error('test server did not bind');
+    await writeConfig(home, { ...(await readConfig(home)), port: address.port });
+    try {
+      const out: string[] = [];
+      const err: string[] = [];
+      const code = await run(
+        ['projects', 'add', root, '--origin', 'http://127.0.0.1:3000'],
+        { ...process.env, AIDEV_HOME: home },
+        {
+          stdout: (line) => out.push(line),
+          stderr: (line) => err.push(line),
+        },
+      );
+      expect(code).toBe(0);
+      const snippet = out.join('\n');
+      expect(snippet).toContain(`src="http://127.0.0.1:${address.port}/overlay.js" defer`);
+      expect(snippet).toContain('window.__AI_DEVTOOLS__');
+      expect(err.join('\n')).not.toMatch(/Gateway is not running/);
+
+      await expect(
+        run(['projects', 'add', root], { ...process.env, AIDEV_HOME: home }, silentIo()),
+      ).rejects.toThrow(/--origin is required/);
+      await expect(
+        run(
+          ['projects', 'add', root, '--origin', 'https://evil.example'],
+          { ...process.env, AIDEV_HOME: home },
+          silentIo(),
+        ),
+      ).rejects.toThrow(/Invalid --origin/);
+    } finally {
+      await server.close();
+    }
   });
 
   it('prints provider rows from doctor', async () => {
@@ -120,6 +175,13 @@ function capture(lines: string[]) {
   return {
     stdout: (line: string) => lines.push(line),
     stderr: (line: string) => lines.push(line),
+  };
+}
+
+function silentIo() {
+  return {
+    stdout: () => undefined,
+    stderr: () => undefined,
   };
 }
 

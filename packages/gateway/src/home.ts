@@ -60,9 +60,18 @@ export async function readConfig(home: string): Promise<AidevConfig> {
 /** Atomic replace so a crash cannot leave a half-written config. */
 export async function writeConfig(home: string, config: AidevConfig): Promise<void> {
   const parsed = AidevConfigSchema.parse(config);
-  const file = path.join(home, CONFIG_NAME);
-  const tmp = path.join(home, `.${CONFIG_NAME}.${process.pid}.${Date.now()}.tmp`);
-  await writeFile(tmp, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  await writeSecretFile(home, CONFIG_NAME, `${JSON.stringify(parsed, null, 2)}\n`);
+}
+
+/**
+ * Write `name` under `home` with mode 0600, using a temp file and rename.
+ * The home directory is created (0700) when it is missing.
+ */
+export async function writeSecretFile(home: string, name: string, contents: string): Promise<void> {
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  const file = path.join(home, name);
+  const tmp = path.join(home, `.${name}.${process.pid}.${Date.now()}.tmp`);
+  await writeFile(tmp, contents, { encoding: 'utf8', mode: 0o600 });
   await chmod(tmp, 0o600);
   await rename(tmp, file);
   await chmod(file, 0o600);
