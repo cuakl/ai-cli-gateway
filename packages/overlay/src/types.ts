@@ -59,6 +59,8 @@ export interface DevtoolsConfig {
   cwd?: string;
   /** package.json name, shown on the Tests panel. */
   projectName?: string;
+  /** Browser token injected by the Vite plugin. */
+  token?: string;
   transport?: GatewayTransportMode;
   client?: GatewayBridge;
   bridge?: DevtoolsBridge;

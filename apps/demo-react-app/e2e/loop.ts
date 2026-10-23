@@ -30,13 +30,15 @@ async function main(): Promise<void> {
   let gateway: Awaited<ReturnType<typeof buildServer>> | undefined;
   let browser: Browser | undefined;
   let vite: ViteServer | undefined;
+  let home: string | undefined;
   const logs: string[] = [];
   try {
     const editing = createEditingRuntime(dir);
-    gateway = await buildServer({ runtime: editing.runtime, root: dir });
+    home = await mkdtemp(path.join(tmpdir(), 'aidev-e2e-home-'));
+    gateway = await buildServer({ runtime: editing.runtime, root: dir, home });
     await gateway.listen({ host: '127.0.0.1', port: 0 });
     const gatewayUrl = originOf(gateway);
-    vite = await startVite(dir, gatewayUrl, logs);
+    vite = await startVite(dir, gatewayUrl, home, logs);
     browser = await launchBrowser();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     page.on('pageerror', (error) => {
@@ -69,6 +71,7 @@ async function main(): Promise<void> {
     }
     await gateway?.close().catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
+    if (home) await rm(home, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -160,12 +163,12 @@ export default defineConfig({
 });
 `;
 
-function startVite(dir: string, gatewayUrl: string, logs: string[]): Promise<ViteServer> {
+function startVite(dir: string, gatewayUrl: string, home: string, logs: string[]): Promise<ViteServer> {
   return freePort().then((port) => {
     const viteBin = path.join(demoRoot, 'node_modules', 'vite', 'bin', 'vite.js');
     const child = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
       cwd: dir,
-      env: { ...process.env, GATEWAY_URL: gatewayUrl, GATEWAY_LOG_LEVEL: 'silent' },
+      env: { ...process.env, AIDEV_HOME: home, GATEWAY_URL: gatewayUrl, GATEWAY_LOG_LEVEL: 'silent' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';

@@ -43,6 +43,7 @@ export class AiDevtoolsElement extends HTMLElement {
         DEFAULT_GATEWAY_URL,
       cwd: this.config.cwd ?? this.getAttribute('cwd') ?? nonempty(injected.cwd) ?? '.',
       projectName: nonempty(this.config.projectName) ?? nonempty(injected.projectName),
+      token: nonempty(this.config.token) ?? nonempty(injected.browserToken),
     };
   }
 

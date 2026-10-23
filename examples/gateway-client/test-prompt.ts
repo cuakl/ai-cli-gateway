@@ -8,9 +8,14 @@
  * GATEWAY_CWD defaults to the current working directory.
  * GATEWAY_PROVIDER selects a provider. When unset, antigravity is preferred,
  * then cursor, then any other CLI the gateway detected.
+ * AIDEV_TOKEN overrides the machine token read from AIDEV_HOME/token (default ~/.aidev/token).
  */
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import path from 'node:path';
 
 const baseUrl = (process.env.GATEWAY_URL ?? 'http://127.0.0.1:4100').replace(/\/$/, '');
+const machineToken = readMachineToken();
 
 interface ProviderStatus {
   provider: string;
@@ -18,10 +23,11 @@ interface ProviderStatus {
   binaryPath: string | null;
 }
 
-interface HealthResponse {
+interface StatusResponse {
   status: string;
-  timestamp: number;
-  availableProviders: ProviderStatus[];
+  version: string;
+  activeRuns: number;
+  providers: ProviderStatus[];
 }
 
 interface SessionCreated {
@@ -42,11 +48,13 @@ interface StreamEvent {
 }
 
 async function main(): Promise<void> {
-  const health = await getJson<HealthResponse>('/health');
-  if (health.status !== 'ok' || !Array.isArray(health.availableProviders)) {
-    throw new Error('Gateway health check did not return provider status');
+  const health = await getJson<{ status: string; version: string }>('/health');
+  if (health.status !== 'ok') throw new Error('Gateway health check failed');
+  const status = await getJson<StatusResponse>('/api/v1/status');
+  if (!Array.isArray(status.providers)) {
+    throw new Error('Gateway status did not return providers');
   }
-  const provider = chooseProvider(health.availableProviders);
+  const provider = chooseProvider(status.providers);
   const cwd = process.env.GATEWAY_CWD ?? process.cwd();
   const prompt = process.argv.slice(2).join(' ').trim() || 'Say hello in one short sentence.';
   console.error(
@@ -68,13 +76,16 @@ async function main(): Promise<void> {
       process.exit(130);
       return;
     }
-    void fetch(`${baseUrl}/api/v1/sessions/${sessionId}`, { method: 'DELETE' }).finally(() => {
+    void fetch(`${baseUrl}/api/v1/sessions/${sessionId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }).finally(() => {
       process.exit(130);
     });
   };
   process.on('SIGINT', onInterrupt);
 
-  const response = await fetch(`${baseUrl}${created.streamUrl}`);
+  const response = await fetch(`${baseUrl}${created.streamUrl}`, { headers: authHeaders() });
   if (!response.ok || !response.body) {
     throw new Error(`SSE subscribe failed (${response.status})`);
   }
@@ -129,21 +140,38 @@ function chooseProvider(providers: ProviderStatus[]): ProviderStatus {
   return any;
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`);
-  if (!response.ok) throw new Error(`${path} returned ${response.status}`);
+function readMachineToken(): string {
+  const fromEnv = process.env.AIDEV_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  const home = process.env.AIDEV_HOME?.trim()
+    ? path.resolve(process.env.AIDEV_HOME.trim())
+    : path.join(homedir(), '.aidev');
+  try {
+    return readFileSync(path.join(home, 'token'), 'utf8').trim();
+  } catch {
+    throw new Error(`No machine token at ${path.join(home, 'token')}. Start the gateway once, or set AIDEV_TOKEN.`);
+  }
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  return { ...(extra ?? {}), authorization: `Bearer ${machineToken}` };
+}
+
+async function getJson<T>(requestPath: string): Promise<T> {
+  const response = await fetch(`${baseUrl}${requestPath}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(`${requestPath} returned ${response.status}`);
   return (await response.json()) as T;
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
+async function postJson<T>(requestPath: string, body: unknown): Promise<T> {
+  const response = await fetch(`${baseUrl}${requestPath}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: authHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify(body),
   });
   const payload = (await response.json()) as T & { message?: string };
   if (!response.ok) {
-    throw new Error(payload.message ?? `${path} returned ${response.status}`);
+    throw new Error(payload.message ?? `${requestPath} returned ${response.status}`);
   }
   return payload;
 }

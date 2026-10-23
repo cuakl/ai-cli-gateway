@@ -8,14 +8,22 @@ import {
 } from '@aidev/protocol';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
+import { requirePrincipal } from '../auth/principal.js';
 import { HttpError } from '../errors.js';
-import { cancelSession, startExecution } from '../execute.js';
+import { cancelSession, sessionVisible, startExecution } from '../execute.js';
 import type { ServerDeps } from '../types.js';
 
 const WS_OPEN = 1;
 
 export function registerWebSocketRoutes(app: FastifyInstance, deps: ServerDeps): void {
-  app.get('/ws', { websocket: true }, (socket: WebSocket) => {
+  app.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    let principal: ReturnType<typeof requirePrincipal>;
+    try {
+      principal = requirePrincipal(request);
+    } catch {
+      socket.close(4401, 'unauthorized');
+      return;
+    }
     const subscriptions: Array<() => void> = [];
 
     const send = (message: GatewayServerMessage): void => {
@@ -73,13 +81,17 @@ export function registerWebSocketRoutes(app: FastifyInstance, deps: ServerDeps):
         send({ type: 'error', sessionId, message: `Session ${sessionId} was not found` });
         return;
       }
+      if (!sessionVisible(deps, principal, existing.cwd)) {
+        send({ type: 'error', sessionId, message: 'Session is outside this project' });
+        return;
+      }
       await cancelSession(deps.registry, sessionId);
     }
 
     async function handlePrompt(message: Extract<GatewayClientMessage, { type: 'prompt' }>): Promise<void> {
       let started: Awaited<ReturnType<typeof startExecution>>;
       try {
-        started = await startExecution(deps, promptFromMessage(message));
+        started = await startExecution(deps, promptFromMessage(message), undefined, principal);
       } catch (error) {
         const httpError = error instanceof HttpError ? error : undefined;
         send({

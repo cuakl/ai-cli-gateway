@@ -1,5 +1,6 @@
 import { PromptRequestSchema, type PromptRequest } from '@aidev/protocol';
 import type { FastifyInstance } from 'fastify';
+import { requirePrincipal } from '../auth/principal.js';
 import { executionHttpError, startExecution } from '../execute.js';
 import { HttpError, sendHttpError } from '../errors.js';
 import type { ServerDeps } from '../types.js';
@@ -8,7 +9,7 @@ export function registerPromptRoutes(app: FastifyInstance, deps: ServerDeps): vo
   app.post('/api/v1/prompt', async (request, reply) => {
     try {
       const body = readPromptRequest(request.body);
-      const { sessionId, done } = await startExecution(deps, body);
+      const { sessionId, done } = await startExecution(deps, body, undefined, requirePrincipal(request));
       const outcome = await done;
       if (outcome.error) {
         const httpError = executionHttpError(outcome.error);

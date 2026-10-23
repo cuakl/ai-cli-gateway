@@ -27,6 +27,10 @@ export interface DevtoolsWindowConfig {
   cwd?: string;
   /** package.json name of the Vite project, when it has one. */
   projectName?: string;
+  /** Project id from `POST /api/v1/projects/register`. */
+  projectId?: string;
+  /** Browser token for this project. */
+  browserToken?: string;
 }
 
 interface BridgeMessage {

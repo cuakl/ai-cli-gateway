@@ -5,6 +5,7 @@ import {
   PathEscapeError,
   ProcessTimeoutError,
   confineWorkspace,
+  isInsideRoot,
   logger,
   type CLIAdapter,
 } from '@aidev/adapters';
@@ -15,6 +16,7 @@ import {
   type SessionStatus,
   type UnifiedStreamEvent,
 } from '@aidev/protocol';
+import type { Principal } from './auth/principal.js';
 import { HttpError } from './errors.js';
 import type { SessionRegistry } from './sessions/registry.js';
 import type { ServerDeps } from './types.js';
@@ -42,8 +44,10 @@ export async function startExecution(
   deps: ServerDeps,
   request: PromptRequest,
   sessionId: string = request.sessionId ?? `sess_${randomUUID()}`,
+  principal?: Principal,
 ): Promise<StartedExecution> {
-  const prompt = await confineRequest(deps, request);
+  if (!principal) throw new HttpError(401, 'unauthorized', 'A bearer token is required');
+  const prompt = await confineRequest(deps, request, principal);
   const adapter = await prepareAdapter(deps, prompt, sessionId);
   deps.registry.create({
     id: sessionId,
@@ -191,21 +195,52 @@ async function signalUntilRegistered(
   }
 }
 
-async function confineRequest(deps: ServerDeps, request: PromptRequest): Promise<PromptRequest> {
-  if (!deps.root) return request;
-  try {
-    const confined = await confineWorkspace(deps.root, request.cwd, request.files ?? []);
-    return {
-      ...request,
-      cwd: confined.cwd,
-      ...(request.files !== undefined ? { files: confined.files } : {}),
-    };
-  } catch (error) {
-    if (error instanceof PathEscapeError) {
-      throw new HttpError(400, 'path_escape', error.message);
-    }
-    throw error;
+/** Roots a principal may read or edit. A browser token has exactly one. */
+export function rootsFor(deps: ServerDeps, principal: Principal): string[] {
+  if (principal.kind === 'browser') {
+    const project = deps.projects.get(principal.projectId);
+    return project ? [project.root] : [];
   }
+  return deps.projects.roots();
+}
+
+export function sessionVisible(deps: ServerDeps, principal: Principal, cwd: string): boolean {
+  return rootsFor(deps, principal).some((root) => isInsideRoot(root, cwd));
+}
+
+export function countActiveRuns(deps: ServerDeps, principal: Principal): number {
+  return deps.registry.list().filter((record) => {
+    if (record.status !== 'running' && record.status !== 'pending') return false;
+    if (principal.kind === 'machine') return true;
+    return sessionVisible(deps, principal, record.cwd);
+  }).length;
+}
+
+async function confineRequest(
+  deps: ServerDeps,
+  request: PromptRequest,
+  principal: Principal,
+): Promise<PromptRequest> {
+  const roots = rootsFor(deps, principal);
+  if (roots.length === 0) {
+    throw new HttpError(400, 'path_escape', 'No project is registered for this path');
+  }
+  let last: unknown;
+  for (const root of roots) {
+    try {
+      const confined = await confineWorkspace(root, request.cwd, request.files ?? []);
+      return {
+        ...request,
+        cwd: confined.cwd,
+        ...(request.files !== undefined ? { files: confined.files } : {}),
+      };
+    } catch (error) {
+      if (!(error instanceof PathEscapeError)) throw error;
+      last = error;
+    }
+  }
+  const message = last instanceof PathEscapeError ? last.message : 'Path escapes the project root';
+  throw new HttpError(400, 'path_escape', message);
 }
 
 export function executionHttpError(error: unknown): HttpError {

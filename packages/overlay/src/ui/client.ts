@@ -28,14 +28,17 @@ export interface GatewayClientOptions {
   gatewayUrl?: string;
   cwd?: string;
   transport?: GatewayTransportMode;
+  /** Machine or browser token. Sent as `Authorization: Bearer` and `?token=` on the WebSocket. */
+  token?: string;
 }
 
-export function gatewayWebSocketUrl(gatewayUrl: string): string {
+export function gatewayWebSocketUrl(gatewayUrl: string, token?: string): string {
   const url = new URL(gatewayUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   url.pathname = '/ws';
   url.search = '';
   url.hash = '';
+  if (token) url.searchParams.set('token', token);
   return url.toString();
 }
 
@@ -84,6 +87,7 @@ export class GatewayClient implements GatewayBridge {
   private readonly gatewayUrl: string;
   private readonly cwd: string;
   private readonly transport: GatewayTransportMode;
+  private readonly token: string | undefined;
   private socket: WebSocket | null = null;
   private abort: AbortController | null = null;
   private sessionId: string | undefined;
@@ -94,6 +98,13 @@ export class GatewayClient implements GatewayBridge {
     this.gatewayUrl = (options.gatewayUrl ?? DEFAULT_GATEWAY_URL).replace(/\/$/, '');
     this.cwd = options.cwd && options.cwd.trim() ? options.cwd : '.';
     this.transport = options.transport ?? 'auto';
+    this.token = options.token?.trim() || undefined;
+  }
+
+  private authHeaders(extra?: HeadersInit): Headers {
+    const headers = new Headers(extra);
+    if (this.token) headers.set('authorization', `Bearer ${this.token}`);
+    return headers;
   }
 
   async checkHealth(): Promise<boolean> {
@@ -120,6 +131,7 @@ export class GatewayClient implements GatewayBridge {
     try {
       const response = await fetch(new URL('/health', `${this.gatewayUrl}/`), {
         signal: controller.signal,
+        headers: this.authHeaders(),
       });
       if (!response.ok) return null;
       return (await response.json()) as HealthBody;
@@ -200,7 +212,7 @@ export class GatewayClient implements GatewayBridge {
 
       let socket: WebSocket;
       try {
-        socket = new WebSocket(gatewayWebSocketUrl(this.gatewayUrl));
+        socket = new WebSocket(gatewayWebSocketUrl(this.gatewayUrl, this.token));
       } catch (error) {
         finish(error instanceof Error ? error : new Error('WebSocket failed'));
         return;
@@ -238,7 +250,7 @@ export class GatewayClient implements GatewayBridge {
     try {
       const created = await fetch(new URL('/api/v1/sessions', `${this.gatewayUrl}/`), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: this.authHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({
           provider: message.provider,
           cwd: message.cwd,
@@ -254,7 +266,7 @@ export class GatewayClient implements GatewayBridge {
       const body = (await created.json()) as { streamUrl?: string };
       if (!body.streamUrl) throw new Error('Gateway did not return a stream URL');
       const stream = await fetch(new URL(body.streamUrl, `${this.gatewayUrl}/`), {
-        headers: { accept: 'text/event-stream' },
+        headers: this.authHeaders({ accept: 'text/event-stream' }),
         signal,
       });
       if (!stream.ok || !stream.body) throw new Error(`Stream failed (${stream.status})`);

@@ -10,6 +10,7 @@ import { placeBeforeJsxCompilers } from './plugin-order.js';
 import { DEFAULT_RELOAD_DEBOUNCE_MS } from './hmr-guard.js';
 import { registerDevtoolsSocket } from './socket.js';
 import { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE } from './brand.js';
+import { readMachineToken, registerProject, type RegisteredProject } from './register-project.js';
 
 export { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE };
 export { createPromptRunner, DEFAULT_GATEWAY_URL } from './bridge.js';
@@ -61,6 +62,7 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
   let wsBase = '/';
   let projectName: string | undefined;
   const gatewayUrl = resolveGatewayUrl(options.gatewayUrl);
+  let registration: Promise<RegisteredProject | null> | null = null;
   const runner: PromptRunner = createPromptRunner({
     gatewayUrl,
     onFallback(fallbackUrl, provider) {
@@ -104,15 +106,19 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
       if (!devActive() || options.injectDataLoc === false) return null;
       return injectDataLoc(code, id, root);
     },
-    transformIndexHtml(html) {
+    async transformIndexHtml(html) {
       if (!devActive()) return undefined;
       if (html.includes(publicPath)) return undefined;
+      const registered = registration ? await registration : null;
       const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify({
         wsToken,
         wsBase,
         gatewayUrl,
         cwd: root,
         ...(projectName ? { projectName } : {}),
+        ...(registered
+          ? { projectId: registered.projectId, browserToken: registered.browserToken }
+          : {}),
       }).replace(/</g, '\\u003c')};`;
       return [
         {
@@ -130,6 +136,31 @@ export function aiDevtools(options: DevtoolsPluginOptions = {}): Plugin {
     },
     configureServer(server) {
       if (!devActive()) return;
+      const httpServer = server.httpServer;
+      if (!server.config.server.middlewareMode && httpServer) {
+        registration = new Promise((resolve) => {
+          const finish = (): void => {
+            const address = httpServer.address();
+            const port = address && typeof address === 'object' ? address.port : server.config.server.port;
+            const hostSetting = server.config.server.host;
+            const host =
+              hostSetting === true || hostSetting === '0.0.0.0' || hostSetting === '::' || !hostSetting
+                ? '127.0.0.1'
+                : hostSetting;
+            if (!port) {
+              resolve(null);
+              return;
+            }
+            const origin = `http://${host}:${port}`;
+            void readMachineToken()
+              .then((token) => (token ? registerProject({ gatewayUrl, root, origin, token }) : null))
+              .then((result) => resolve(result))
+              .catch(() => resolve(null));
+          };
+          if (httpServer.listening) finish();
+          else httpServer.once('listening', finish);
+        });
+      }
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? '').split('?')[0] ?? '';
         if (pathname !== publicPath && pathname !== `${publicPath}.map`) {

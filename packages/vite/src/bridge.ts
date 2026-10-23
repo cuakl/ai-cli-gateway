@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createAdapter } from '@aidev/adapters';
+import { readMachineToken } from './register-project.js';
 import type { CLIAdapter } from '@aidev/adapters';
 import {
   UnifiedStreamEventSchema,
@@ -56,13 +57,19 @@ export function createPromptRunner(options: PromptRunnerOptions = {}): PromptRun
   const fetchImpl = options.fetchImpl ?? fetch;
   const adapterFor = options.createAdapter ?? ((provider: ProviderType) => createAdapter(provider));
   let warned = false;
+  let tokenPromise: Promise<string | null> | undefined;
+  const machineToken = (): Promise<string | null> => {
+    if (process.env.VITEST && !process.env.AIDEV_HOME) return Promise.resolve(null);
+    tokenPromise ??= readMachineToken();
+    return tokenPromise;
+  };
 
   return {
     async start(input, onEvent) {
       const sink = createSink(onEvent);
       try {
         if (await gatewayReachable(gatewayUrl, fetchImpl)) {
-          return await startViaGateway(gatewayUrl, fetchImpl, input, sink);
+          return await startViaGateway(gatewayUrl, fetchImpl, input, sink, await machineToken());
         }
         if (!warned) {
           warned = true;
@@ -151,11 +158,12 @@ async function startViaGateway(
   fetchImpl: typeof fetch,
   input: DevtoolsPromptInput,
   sink: EventSink,
+  token: string | null,
 ): Promise<PromptSession> {
   const controller = new AbortController();
   const response = await fetchImpl(new URL('/api/v1/sessions', `${gatewayUrl}/`), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: authHeaders(token, { 'content-type': 'application/json' }),
     body: JSON.stringify(promptRequest(input)),
     signal: controller.signal,
   });
@@ -171,6 +179,7 @@ async function startViaGateway(
     controller.signal,
     sessionId,
     sink,
+    token,
   );
 
   return {
@@ -179,6 +188,7 @@ async function startViaGateway(
       controller.abort();
       await fetchImpl(new URL(`/api/v1/sessions/${sessionId}`, `${gatewayUrl}/`), {
         method: 'DELETE',
+        headers: authHeaders(token),
       }).catch(() => undefined);
     },
   };
@@ -190,10 +200,11 @@ async function readGatewayStream(
   signal: AbortSignal,
   sessionId: string,
   sink: EventSink,
+  token: string | null,
 ): Promise<void> {
   try {
     const response = await fetchImpl(url, {
-      headers: { accept: 'text/event-stream' },
+      headers: authHeaders(token, { accept: 'text/event-stream' }),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -292,6 +303,13 @@ async function readError(response: Response): Promise<string> {
     // The body is plain text.
   }
   return text.trim() || `Gateway responded ${response.status}`;
+}
+
+function authHeaders(token: string | null, extra?: Record<string, string>): Record<string, string> {
+  return {
+    ...(extra ?? {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
 }
 
 function messageOf(error: unknown): string {

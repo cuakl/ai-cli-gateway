@@ -11,6 +11,9 @@
       "import": "./dist/app.js"
     }
   },
+  "bin": {
+    "aidev": "./dist/cli.js"
+  },
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.test.json --noEmit",
@@ -26,6 +29,8 @@
     "@aidev/adapters": "workspace:*",
     "@aidev/protocol": "workspace:*",
     "fastify": "^5.6.1",
+    "node-pty": "^1.0.0",
+    "simple-git": "^3.28.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

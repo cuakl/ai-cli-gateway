@@ -104,6 +104,11 @@ export class SessionRegistry {
     return session ? { ...session.record } : undefined;
   }
 
+  /** Snapshot of every session still held in memory, including finished ones inside the TTL. */
+  list(): SessionRecord[] {
+    return [...this.sessions.values()].map((session) => ({ ...session.record }));
+  }
+
   events(id: string): UnifiedStreamEvent[] | undefined {
     const session = this.sessions.get(id);
     return session ? [...session.events] : undefined;

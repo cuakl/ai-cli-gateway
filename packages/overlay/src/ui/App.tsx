@@ -47,8 +47,9 @@ export function App({ config }: AppProps) {
         gatewayUrl: config.gatewayUrl,
         cwd: config.cwd,
         transport: config.transport,
+        ...(config.token ? { token: config.token } : {}),
       }),
-    [config.client, config.cwd, config.gatewayUrl, config.transport],
+    [config.client, config.cwd, config.gatewayUrl, config.token, config.transport],
   );
   const bridge = useMemo(() => config.bridge ?? createDevtoolsBridge(), [config.bridge]);
 

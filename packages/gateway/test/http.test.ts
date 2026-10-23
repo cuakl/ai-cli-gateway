@@ -36,13 +36,13 @@ describe('GET /health and GET /api/v1/providers', () => {
     await close();
   });
 
-  it('reports gateway status and detected providers', async () => {
+  it('reports gateway status and detected providers when the caller has a token', async () => {
     const health = await requestJson(`${url}/health`);
     expect(health.status).toBe(200);
     expect(isRecord(health.body)).toBe(true);
     if (!isRecord(health.body)) return;
     expect(health.body.status).toBe('ok');
-    expect(typeof health.body.timestamp).toBe('number');
+    expect(typeof health.body.version).toBe('string');
     const providers = health.body.availableProviders;
     expect(Array.isArray(providers)).toBe(true);
     if (!Array.isArray(providers)) return;
@@ -70,11 +70,26 @@ describe('GET /health and GET /api/v1/providers', () => {
     expect(listed.body.providers).toEqual(health.body.availableProviders);
   });
 
-  it('reflects the request origin', async () => {
-    const health = await requestJson(`${url}/health`, {
-      headers: { origin: 'http://localhost:5173' },
-    });
-    expect(health.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+  it('reflects a registered origin and omits ACAO for any other', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'gateway-cors-'));
+    try {
+      const registered = await postJson(`${url}/api/v1/projects/register`, {
+        root,
+        origin: 'http://localhost:5173',
+      });
+      expect(registered.status).toBe(200);
+      const allowed = await requestJson(`${url}/health`, {
+        headers: { origin: 'http://localhost:5173' },
+      });
+      expect(allowed.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+      const evil = await requestJson(`${url}/health`, {
+        headers: { origin: 'https://evil.example' },
+      });
+      expect(evil.status).toBe(200);
+      expect(evil.headers.get('access-control-allow-origin')).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

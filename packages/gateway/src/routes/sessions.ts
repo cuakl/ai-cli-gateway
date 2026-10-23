@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { UnifiedStreamEvent } from '@aidev/protocol';
+import { requirePrincipal } from '../auth/principal.js';
 import { HttpError, sendHttpError } from '../errors.js';
-import { cancelSession, startExecution } from '../execute.js';
+import { cancelSession, sessionVisible, startExecution } from '../execute.js';
 import { readPromptRequest } from './prompt.js';
 import { formatSseEvent } from '../sse.js';
 import type { ServerDeps } from '../types.js';
@@ -15,7 +16,7 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ServerDeps): v
   app.post('/api/v1/sessions', async (request, reply) => {
     try {
       const body = readPromptRequest(request.body);
-      const { sessionId } = await startExecution(deps, body);
+      const { sessionId } = await startExecution(deps, body, undefined, requirePrincipal(request));
       return reply.code(201).send({
         sessionId,
         status: 'running' as const,
@@ -33,6 +34,9 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ServerDeps): v
     if (!record) {
       return reply.code(404).send({ error: 'not_found', message: `Session ${id} was not found` });
     }
+    if (!sessionVisible(deps, requirePrincipal(request), record.cwd)) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
     return record;
   });
 
@@ -41,6 +45,9 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ServerDeps): v
     const existing = deps.registry.get(id);
     if (!existing) {
       return reply.code(404).send({ error: 'not_found', message: `Session ${id} was not found` });
+    }
+    if (!sessionVisible(deps, requirePrincipal(request), existing.cwd)) {
+      return reply.code(403).send({ error: 'forbidden' });
     }
     if (existing.status !== 'running' && existing.status !== 'pending') {
       return reply.code(409).send({ ok: false, sessionId: id, status: existing.status });
@@ -51,8 +58,12 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ServerDeps): v
 
   app.get('/api/v1/sessions/:id/stream', (request, reply) => {
     const id = readSessionId(request);
-    if (!deps.registry.get(id)) {
+    const record = deps.registry.get(id);
+    if (!record) {
       return reply.code(404).send({ error: 'not_found', message: `Session ${id} was not found` });
+    }
+    if (!sessionVisible(deps, requirePrincipal(request), record.cwd)) {
+      return reply.code(403).send({ error: 'forbidden' });
     }
     streamSession(deps, id, request, reply);
   });
