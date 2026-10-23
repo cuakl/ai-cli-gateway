@@ -1,16 +1,34 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import {
+  TestReportSchema,
+  type TestCaseStatus,
+  type TestFileResult,
+  type TestReport,
+} from '@aidev/protocol';
 
 export interface TestCommand {
   command: string;
   args: string[];
 }
 
+export interface TestRunOptions {
+  file?: string;
+  testNamePattern?: string;
+  /** Project-relative files that failed the previous run (`onlyFailed`). */
+  failedFiles?: string[];
+}
+
 export interface TestRunResult {
   exitCode: number;
   command: string;
+  report?: TestReport;
 }
+
+export type TestRunner = 'vitest' | 'jest';
 
 interface PackageJson {
   scripts?: { test?: string };
@@ -33,9 +51,20 @@ export function resolveTestCommand(rootDir: string): TestCommand {
     if (manager === 'npm') return { command: 'npm', args: ['test'] };
     return { command: 'pnpm', args: ['test'] };
   }
-  const usesVitest = Boolean(pkg.devDependencies?.vitest || pkg.dependencies?.vitest);
-  if (usesVitest) return { command: 'npx', args: ['vitest', 'run'] };
+  const runner = detectTestRunner(pkg);
+  if (runner === 'vitest') return { command: 'npx', args: ['vitest', 'run'] };
+  if (runner === 'jest') return { command: 'npx', args: ['jest'] };
   return { command: 'npm', args: ['test'] };
+}
+
+/** Vitest or Jest, from the test script or package dependencies. */
+export function detectTestRunner(pkg: PackageJson): TestRunner | null {
+  const script = pkg.scripts?.test ?? '';
+  if (/\bvitest\b/.test(script)) return 'vitest';
+  if (/\bjest\b/.test(script)) return 'jest';
+  if (pkg.devDependencies?.vitest || pkg.dependencies?.vitest) return 'vitest';
+  if (pkg.devDependencies?.jest || pkg.dependencies?.jest) return 'jest';
+  return null;
 }
 
 /**
@@ -62,24 +91,33 @@ export async function runTests(
   rootDir: string,
   onLine: (line: string) => void,
   signal?: AbortSignal,
-  file?: string,
+  options: TestRunOptions = {},
 ): Promise<TestRunResult> {
+  const pkg = readPackage(rootDir);
+  const runner = detectTestRunner(pkg);
   const resolved = resolveTestCommand(rootDir);
-  const args = [...resolved.args];
-  if (file) {
-    if (args[0] === 'test') args.push('--', file);
-    else args.push(file);
+  const files = resolveRunFiles(options);
+  const reportDir = await mkdtemp(path.join(tmpdir(), 'aidev-test-report-'));
+  const outputFile = path.join(reportDir, 'report.json');
+  try {
+    const args = withReporterArgs(resolved.args, runner, outputFile, {
+      files,
+      testNamePattern: options.testNamePattern,
+    });
+    const command = `${resolved.command} ${args.join(' ')}`;
+    onLine(`$ ${command}`);
+    const exitCode = await runProcess({
+      command: resolved.command,
+      args,
+      cwd: rootDir,
+      onLine,
+      ...(signal ? { signal } : {}),
+    });
+    const report = await readReportFile(outputFile, rootDir);
+    return report ? { exitCode, command, report } : { exitCode, command };
+  } finally {
+    await rm(reportDir, { recursive: true, force: true });
   }
-  const command = `${resolved.command} ${args.join(' ')}`;
-  onLine(`$ ${command}`);
-  const exitCode = await runProcess({
-    command: resolved.command,
-    args,
-    cwd: rootDir,
-    onLine,
-    ...(signal ? { signal } : {}),
-  });
-  return { exitCode, command };
 }
 
 export function runProcess(options: {
@@ -126,6 +164,186 @@ export function runProcess(options: {
       { once: true },
     );
   });
+}
+
+/**
+ * Parse a Vitest or Jest JSON reporter payload into the workspace `test.finished` report.
+ * Paths are rewritten relative to `projectRoot`.
+ */
+export function parseJsonTestReport(raw: string, projectRoot: string): TestReport | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.testResults)) return undefined;
+  const files: TestFileResult[] = [];
+  for (const entry of parsed.testResults) {
+    if (!isRecord(entry) || typeof entry.name !== 'string') continue;
+    const tests = Array.isArray(entry.assertionResults)
+      ? entry.assertionResults.flatMap((item) => {
+          const test = parseAssertion(item);
+          return test ? [test] : [];
+        })
+      : [];
+    const fileStatus = fileStatusOf(entry.status, tests);
+    files.push({
+      path: toProjectPath(projectRoot, entry.name),
+      status: fileStatus,
+      tests,
+    });
+  }
+  const counted = countTests(files);
+  const durationMs = reportDurationMs(parsed, files);
+  const report = {
+    summary: {
+      passed: numberField(parsed.numPassedTests) ?? counted.passed,
+      failed: numberField(parsed.numFailedTests) ?? counted.failed,
+      skipped:
+        (numberField(parsed.numPendingTests) ?? 0) + (numberField(parsed.numTodoTests) ?? 0) ||
+        counted.skipped,
+      durationMs,
+    },
+    files,
+  };
+  const result = TestReportSchema.safeParse(report);
+  return result.success ? result.data : undefined;
+}
+
+function withReporterArgs(
+  args: string[],
+  runner: TestRunner | null,
+  outputFile: string,
+  extra: { files: string[]; testNamePattern?: string },
+): string[] {
+  const next = [...args];
+  const passthrough = runner ? reporterFlags(runner, outputFile) : [];
+  if (extra.testNamePattern) passthrough.push('--testNamePattern', extra.testNamePattern);
+  passthrough.push(...extra.files);
+  if (passthrough.length === 0) return next;
+  if (usesScriptPassthrough(next)) {
+    if (!next.includes('--')) next.push('--');
+    next.push(...passthrough);
+    return next;
+  }
+  next.push(...passthrough);
+  return next;
+}
+
+function reporterFlags(runner: TestRunner, outputFile: string): string[] {
+  if (runner === 'vitest') {
+    return ['--reporter=default', '--reporter=json', `--outputFile=${outputFile}`];
+  }
+  return ['--json', `--outputFile=${outputFile}`];
+}
+
+function usesScriptPassthrough(args: string[]): boolean {
+  return args[0] === 'test';
+}
+
+function resolveRunFiles(options: TestRunOptions): string[] {
+  if (options.failedFiles?.length) {
+    if (options.file) return options.failedFiles.filter((file) => file === options.file);
+    return options.failedFiles;
+  }
+  return options.file ? [options.file] : [];
+}
+
+async function readReportFile(outputFile: string, projectRoot: string): Promise<TestReport | undefined> {
+  try {
+    const raw = await readFile(outputFile, 'utf8');
+    return parseJsonTestReport(raw, projectRoot);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseAssertion(value: unknown): TestFileResult['tests'][number] | undefined {
+  if (!isRecord(value) || typeof value.title !== 'string') return undefined;
+  const status = mapCaseStatus(value.status);
+  const duration = numberField(value.duration) ?? 0;
+  const fullName = typeof value.fullName === 'string' && value.fullName ? value.fullName : value.title;
+  const failureMessages = Array.isArray(value.failureMessages)
+    ? value.failureMessages.filter((item): item is string => typeof item === 'string')
+    : [];
+  const location = parseLocation(value.location);
+  return {
+    name: value.title,
+    fullName,
+    status,
+    durationMs: Math.max(0, duration),
+    failureMessages,
+    ...(location ? { location } : {}),
+  };
+}
+
+function parseLocation(value: unknown): { line: number; column: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const line = numberField(value.line);
+  const column = numberField(value.column);
+  if (line === undefined || column === undefined) return undefined;
+  return { line, column };
+}
+
+function mapCaseStatus(value: unknown): TestCaseStatus {
+  if (value === 'passed') return 'passed';
+  if (value === 'failed') return 'failed';
+  return 'skipped';
+}
+
+function fileStatusOf(raw: unknown, tests: TestFileResult['tests']): TestCaseStatus {
+  if (tests.some((test) => test.status === 'failed') || raw === 'failed') return 'failed';
+  if (tests.length > 0 && tests.every((test) => test.status === 'skipped')) return 'skipped';
+  if (raw === 'passed' || tests.some((test) => test.status === 'passed')) return 'passed';
+  return 'skipped';
+}
+
+function countTests(files: TestFileResult[]): { passed: number; failed: number; skipped: number } {
+  const summary = { passed: 0, failed: 0, skipped: 0 };
+  for (const file of files) {
+    for (const test of file.tests) {
+      summary[test.status] += 1;
+    }
+  }
+  return summary;
+}
+
+function reportDurationMs(parsed: Record<string, unknown>, files: TestFileResult[]): number {
+  let fromFiles = 0;
+  let haveFileTimes = false;
+  if (Array.isArray(parsed.testResults)) {
+    for (const entry of parsed.testResults) {
+      if (!isRecord(entry)) continue;
+      const start = numberField(entry.startTime);
+      const end = numberField(entry.endTime);
+      if (start !== undefined && end !== undefined && end >= start) {
+        fromFiles += end - start;
+        haveFileTimes = true;
+      }
+    }
+  }
+  if (haveFileTimes) return Math.max(0, fromFiles);
+  return files.reduce(
+    (total, file) => total + file.tests.reduce((sum, test) => sum + test.durationMs, 0),
+    0,
+  );
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function toProjectPath(projectRoot: string, absolute: string): string {
+  const relative = path.relative(projectRoot, absolute);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return absolute.split(path.sep).join('/');
+  }
+  return relative.split(path.sep).join('/');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function findPackageManager(rootDir: string): 'pnpm' | 'npm' | 'yarn' | null {

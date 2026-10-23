@@ -20,8 +20,26 @@ import { simpleGit, type FileStatusResult, type SimpleGit } from 'simple-git';
 
 const exec = promisify(execFile);
 const BLOB_LIMIT = 20 * 1024 * 1024;
-
+const GH_CACHE_MS = 60_000;
 const TEXT_LIMIT = 1_500_000;
+
+export class GitOpError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'GitOpError';
+    this.code = code;
+  }
+}
+
+interface GhProbe {
+  pathKey: string;
+  expiresAt: number;
+  status: 'ok' | 'missing' | 'unauthenticated';
+}
+
+let ghProbe: GhProbe | null = null;
 
 export interface GitCommitResult {
   commitHash: string;
@@ -135,11 +153,20 @@ export async function gitStatus(rootDir: string): Promise<GitStatus> {
   const dirty = unique([...status.files.map((entry) => entry.path), ...status.not_added]).map((file) =>
     toProjectPath(repo.scope, file),
   );
+  const tracking = status.tracking?.trim();
+  const gh = await inspectGh();
   return GitStatusSchema.parse({
     branch: branchName(status.current) ?? 'HEAD',
     clean: conflicted.length === 0 && dirty.length === 0,
     conflicted,
     dirty,
+    ghAvailable: gh === 'ok',
+    ...(tracking
+      ? {
+          ahead: Math.max(0, status.ahead),
+          behind: Math.max(0, status.behind),
+        }
+      : {}),
   });
 }
 
@@ -158,7 +185,16 @@ export async function gitLog(rootDir: string, limit: number): Promise<GitLogEntr
       hash,
       subject: subject ?? '',
       at: Number.isFinite(seconds) ? Math.max(0, Math.trunc(seconds * 1000)) : 0,
+      pushed: false,
     });
+  }
+  const upstream = await upstreamRef(repo);
+  if (upstream) {
+    await Promise.all(
+      commits.map(async (entry) => {
+        entry.pushed = await isAncestor(repo, entry.hash, upstream);
+      }),
+    );
   }
   return commits;
 }
@@ -382,6 +418,135 @@ export async function revert(rootDir: string, files?: string[]): Promise<string[
   if (added.length > 0) await repo.git.raw(['rm', '-f', '--', ...unique(added)]);
   if (untracked.length > 0) await cleanUntracked(repo, unique(untracked));
   return requested.map((repoPath) => toProjectPath(repo.scope, repoPath));
+}
+
+/**
+ * Reverse one unstaged hunk as returned by `getDiff` for `file`.
+ * Builds a single-hunk patch with the original file headers and runs `git apply -R`.
+ */
+export async function discardHunk(rootDir: string, file: string, hunkIndex: number): Promise<void> {
+  const repo = await openRepo(rootDir);
+  await assertInProject(repo, file);
+  const summary = await getDiff(rootDir, [file]);
+  const match = summary.files.find((entry) => entry.path === file || entry.oldPath === file);
+  if (!match) {
+    throw new GitOpError('hunk_not_found', `No diff hunks for ${file}`);
+  }
+  if (match.binary) {
+    throw new GitOpError('binary_file', `Cannot discard a hunk in binary file ${file}`);
+  }
+  const patch = buildHunkPatch(match, hunkIndex);
+  const dir = await mkdtemp(path.join(tmpdir(), 'aidev-hunk-'));
+  const patchFile = path.join(dir, 'hunk.patch');
+  try {
+    await writeFile(patchFile, patch.endsWith('\n') ? patch : `${patch}\n`);
+    try {
+      await git(repo.top, ['apply', '-R', '--unidiff-zero', '--', patchFile]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'git apply failed';
+      throw new GitOpError('apply_failed', `Could not discard hunk ${hunkIndex} of ${file}: ${message}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Reconstruct a unified patch containing only `hunks[hunkIndex]` and the file headers. */
+export function buildHunkPatch(file: GitDiffFile, hunkIndex: number): string {
+  const hunk = file.hunks?.[hunkIndex];
+  if (!hunk) {
+    throw new GitOpError('hunk_not_found', `Hunk ${hunkIndex} was not found in ${file.path}`);
+  }
+  const raw = file.patch ?? '';
+  const headerEnd = raw.search(/^@@/m);
+  const header =
+    headerEnd >= 0 ? raw.slice(0, headerEnd).replace(/\s+$/, '') : defaultDiffHeader(file);
+  const at = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
+  const body = hunk.content.endsWith('\n') ? hunk.content : `${hunk.content}\n`;
+  return `${header}\n${at}\n${body}`;
+}
+
+/** Validate the name, refuse if it already exists, then `git switch -c`. */
+export async function createBranch(rootDir: string, name: string): Promise<string> {
+  const repo = await openRepo(rootDir);
+  const trimmed = name.trim();
+  if (!trimmed) throw new GitOpError('invalid_branch', 'Branch name is empty');
+  try {
+    await git(repo.top, ['check-ref-format', '--branch', trimmed]);
+  } catch {
+    throw new GitOpError('invalid_branch', `Invalid branch name: ${trimmed}`);
+  }
+  if (await branchExists(repo, trimmed)) {
+    throw new GitOpError('branch_exists', `Branch ${trimmed} already exists`);
+  }
+  await git(repo.top, ['switch', '-c', trimmed]);
+  return trimmed;
+}
+
+/**
+ * Push the current branch to origin when needed, then `gh pr create` via argv.
+ * Requires `gh` on PATH and signed in, and an `origin` remote.
+ */
+export async function createPullRequest(
+  rootDir: string,
+  request: { title: string; body: string; base: string },
+): Promise<{ url: string }> {
+  const repo = await openRepo(rootDir);
+  const gh = await inspectGh();
+  if (gh === 'missing') {
+    throw new GitOpError('gh_unavailable', 'GitHub CLI (gh) is not installed');
+  }
+  if (gh !== 'ok') {
+    throw new GitOpError('gh_unauthenticated', 'GitHub CLI (gh) is not authenticated. Run gh auth login.');
+  }
+  await assertOrigin(repo);
+  const branch = await currentBranch(repo.git);
+  await pushCurrentBranch(repo, branch);
+  let output = '';
+  try {
+    output = await runArgv('gh', ['pr', 'create', '--title', request.title, '--body', request.body, '--base', request.base], {
+      cwd: repo.top,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'gh pr create failed';
+    throw new GitOpError('pr_failed', message);
+  }
+  const url = parsePrUrl(output);
+  if (!url) {
+    throw new GitOpError('pr_failed', 'gh did not print a pull request URL');
+  }
+  return { url };
+}
+
+/**
+ * Soft-reset HEAD when that commit is not reachable from upstream.
+ * Otherwise throws `already_pushed`.
+ */
+export async function undoCommit(rootDir: string): Promise<string> {
+  const repo = await openRepo(rootDir);
+  const head = await readHead(repo);
+  if (!head) throw new GitOpError('git_error', 'HEAD has no commit to undo');
+  const upstream = await upstreamRef(repo);
+  if (upstream && (await isAncestor(repo, head, upstream))) {
+    throw new GitOpError('already_pushed', 'HEAD has already been pushed');
+  }
+  try {
+    await git(repo.top, ['reset', '--soft', 'HEAD~1']);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'git reset failed';
+    throw new GitOpError('git_error', message);
+  }
+  return head;
+}
+
+/** Forget the cached `gh auth status` result. Tests call this after changing PATH. */
+export function resetGhStatusCache(): void {
+  ghProbe = null;
+}
+
+/** `gh` on PATH and `gh auth status` succeeded. Cached 60s, keyed by PATH. */
+export async function ghAvailable(): Promise<boolean> {
+  return (await inspectGh()) === 'ok';
 }
 
 /** Split a unified diff into per-file hunks. Paths stay as git printed them. */
@@ -799,6 +964,139 @@ async function git(top: string, args: string[], extraEnv?: NodeJS.ProcessEnv): P
     env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
   });
   return (typeof stdout === 'string' ? stdout : Buffer.from(stdout).toString('utf8')).trim();
+}
+
+async function inspectGh(): Promise<'ok' | 'missing' | 'unauthenticated'> {
+  const now = Date.now();
+  const pathKey = process.env.PATH ?? '';
+  if (ghProbe && ghProbe.pathKey === pathKey && now < ghProbe.expiresAt) return ghProbe.status;
+  const status = await probeGh();
+  ghProbe = { pathKey, expiresAt: now + GH_CACHE_MS, status };
+  return status;
+}
+
+async function probeGh(): Promise<'ok' | 'missing' | 'unauthenticated'> {
+  try {
+    await runArgv('gh', ['auth', 'status'], { cwd: process.cwd(), timeoutMs: 8_000 });
+    return 'ok';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return 'missing';
+    return 'unauthenticated';
+  }
+}
+
+async function assertOrigin(repo: RepoContext): Promise<void> {
+  try {
+    const url = await git(repo.top, ['remote', 'get-url', 'origin']);
+    if (!url) throw new Error('empty');
+  } catch {
+    throw new GitOpError('no_origin', 'This repository has no origin remote');
+  }
+}
+
+async function pushCurrentBranch(repo: RepoContext, branch: string): Promise<void> {
+  const status = await repo.git.status();
+  const tracking = status.tracking?.trim();
+  const args = tracking ? ['push', 'origin', branch] : ['push', '-u', 'origin', branch];
+  if (tracking && !(status.ahead > 0)) return;
+  try {
+    await git(repo.top, args, { GIT_TERMINAL_PROMPT: '0' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'git push failed';
+    throw new GitOpError('push_failed', message);
+  }
+}
+
+async function branchExists(repo: RepoContext, name: string): Promise<boolean> {
+  try {
+    await git(repo.top, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function upstreamRef(repo: RepoContext): Promise<string | null> {
+  try {
+    const ref = await git(repo.top, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    return ref || null;
+  } catch {
+    return null;
+  }
+}
+
+async function isAncestor(repo: RepoContext, commit: string, ref: string): Promise<boolean> {
+  try {
+    await git(repo.top, ['merge-base', '--is-ancestor', commit, ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultDiffHeader(file: GitDiffFile): string {
+  const oldPath = file.oldPath ?? file.path;
+  if (file.status === 'added') {
+    return [
+      `diff --git a/${file.path} b/${file.path}`,
+      'new file mode 100644',
+      '--- /dev/null',
+      `+++ b/${file.path}`,
+    ].join('\n');
+  }
+  if (file.status === 'deleted') {
+    return [
+      `diff --git a/${oldPath} b/${oldPath}`,
+      'deleted file mode 100644',
+      `--- a/${oldPath}`,
+      '+++ /dev/null',
+    ].join('\n');
+  }
+  return [
+    `diff --git a/${oldPath} b/${file.path}`,
+    `--- a/${oldPath}`,
+    `+++ b/${file.path}`,
+  ].join('\n');
+}
+
+function parsePrUrl(output: string): string | undefined {
+  const pull = /https:\/\/[^\s]+\/pull\/\d+/.exec(output);
+  if (pull?.[0]) return pull[0];
+  const any = /https:\/\/\S+/.exec(output);
+  return any?.[0]?.replace(/[.,;]+$/, '');
+}
+
+async function runArgv(
+  command: string,
+  args: string[],
+  options: { cwd: string; extraEnv?: NodeJS.ProcessEnv; timeoutMs?: number },
+): Promise<string> {
+  try {
+    const { stdout, stderr } = await exec(command, args, {
+      cwd: options.cwd,
+      maxBuffer: BLOB_LIMIT,
+      timeout: options.timeoutMs,
+      env: options.extraEnv ? { ...process.env, ...options.extraEnv } : process.env,
+    });
+    const out = typeof stdout === 'string' ? stdout : Buffer.from(stdout).toString('utf8');
+    const err = typeof stderr === 'string' ? stderr : Buffer.from(stderr).toString('utf8');
+    return `${out}\n${err}`.trim();
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { stdout?: string | Buffer; stderr?: string | Buffer };
+    if (err.code === 'ENOENT') throw error;
+    const stdout = bufferText(err.stdout);
+    const stderr = bufferText(err.stderr);
+    const message = (stderr || stdout || (error instanceof Error ? error.message : 'command failed')).trim();
+    const wrapped = new Error(message);
+    (wrapped as NodeJS.ErrnoException).code = err.code;
+    throw wrapped;
+  }
+}
+
+function bufferText(value: string | Buffer | undefined): string {
+  if (!value) return '';
+  return typeof value === 'string' ? value : value.toString('utf8');
 }
 
 function gitBuffer(top: string, args: string[]): Promise<Buffer> {

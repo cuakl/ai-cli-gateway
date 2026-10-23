@@ -142,6 +142,11 @@ export type {
 export {
   GitLogEntrySchema,
   GitStatusSchema,
+  TestCaseResultSchema,
+  TestCaseStatusSchema,
+  TestFileResultSchema,
+  TestLocationSchema,
+  TestReportSchema,
   TestStatusSchema,
   TestSummarySchema,
   WorkspaceClientMessageSchema,
@@ -150,6 +155,11 @@ export {
 export type {
   GitLogEntry,
   GitStatus,
+  TestCaseResult,
+  TestCaseStatus,
+  TestFileResult,
+  TestLocation,
+  TestReport,
   TestStatus,
   TestSummary,
   WorkspaceClientMessage,

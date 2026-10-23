@@ -28,6 +28,12 @@ export const GitStatusSchema = z.object({
   clean: z.boolean(),
   conflicted: z.array(z.string()),
   dirty: z.array(z.string()),
+  /** Commits this branch is ahead of its upstream. Omitted when there is no upstream. */
+  ahead: z.number().int().nonnegative().optional(),
+  /** Commits this branch is behind its upstream. Omitted when there is no upstream. */
+  behind: z.number().int().nonnegative().optional(),
+  /** `gh` is on PATH and `gh auth status` succeeded (cached 60s). */
+  ghAvailable: z.boolean(),
 });
 
 export type GitStatus = z.infer<typeof GitStatusSchema>;
@@ -36,6 +42,8 @@ export const GitLogEntrySchema = z.object({
   hash: z.string().min(1),
   subject: z.string(),
   at: z.number().int().nonnegative(),
+  /** True when this commit is reachable from the branch upstream. */
+  pushed: z.boolean(),
 });
 
 export type GitLogEntry = z.infer<typeof GitLogEntrySchema>;
@@ -43,6 +51,10 @@ export type GitLogEntry = z.infer<typeof GitLogEntrySchema>;
 export const TestStatusSchema = z.enum(['passed', 'failed', 'cancelled']);
 
 export type TestStatus = z.infer<typeof TestStatusSchema>;
+
+export const TestCaseStatusSchema = z.enum(['passed', 'failed', 'skipped']);
+
+export type TestCaseStatus = z.infer<typeof TestCaseStatusSchema>;
 
 export const TestSummarySchema = z.object({
   passed: z.number().int().nonnegative(),
@@ -52,6 +64,39 @@ export const TestSummarySchema = z.object({
 });
 
 export type TestSummary = z.infer<typeof TestSummarySchema>;
+
+export const TestLocationSchema = z.object({
+  line: z.number().int().nonnegative(),
+  column: z.number().int().nonnegative(),
+});
+
+export type TestLocation = z.infer<typeof TestLocationSchema>;
+
+export const TestCaseResultSchema = z.object({
+  name: z.string(),
+  fullName: z.string(),
+  status: TestCaseStatusSchema,
+  durationMs: z.number().nonnegative(),
+  failureMessages: z.array(z.string()),
+  location: TestLocationSchema.optional(),
+});
+
+export type TestCaseResult = z.infer<typeof TestCaseResultSchema>;
+
+export const TestFileResultSchema = z.object({
+  path: z.string().min(1),
+  status: TestCaseStatusSchema,
+  tests: z.array(TestCaseResultSchema),
+});
+
+export type TestFileResult = z.infer<typeof TestFileResultSchema>;
+
+export const TestReportSchema = z.object({
+  summary: TestSummarySchema,
+  files: z.array(TestFileResultSchema),
+});
+
+export type TestReport = z.infer<typeof TestReportSchema>;
 
 const sessionId = z.string().min(1);
 
@@ -116,6 +161,11 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
     body: z.string(),
     base: z.string().min(1),
   }),
+  withType('git.discard.hunk', {
+    path: z.string().min(1),
+    hunkIndex: z.number().int().nonnegative(),
+  }),
+  withType('git.commit.undo', {}),
   withType('pty.spawn', {
     cols: z.number().int().positive(),
     rows: z.number().int().positive(),
@@ -135,6 +185,8 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
   withType('test.run', {
     file: z.string().min(1).optional(),
     watch: z.boolean().optional(),
+    testNamePattern: z.string().min(1).optional(),
+    onlyFailed: z.boolean().optional(),
   }),
   withType('test.stop', {}),
   withType('commit.suggest', {
@@ -183,6 +235,7 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
   withType('test.finished', {
     status: TestStatusSchema,
     summary: TestSummarySchema,
+    report: TestReportSchema.optional(),
   }),
   withType('thread.list.result', {
     threads: z.array(ThreadSchema),
@@ -224,6 +277,13 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
   }),
   withType('git.pr.create.result', {
     url: z.string().min(1),
+  }),
+  withType('git.discard.hunk.result', {
+    path: z.string().min(1),
+    hunkIndex: z.number().int().nonnegative(),
+  }),
+  withType('git.commit.undo.result', {
+    hash: z.string().min(1),
   }),
   withType('pty.spawn.result', {
     sessionId,

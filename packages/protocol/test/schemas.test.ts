@@ -539,6 +539,20 @@ const samples: Sample[] = [
     invalid: { type: 'git.pr.create', body: '', base: 'main' },
   },
   {
+    name: 'git.discard.hunk',
+    schema: WorkspaceClientMessageSchema,
+    wire: 'client',
+    valid: { type: 'git.discard.hunk', path: 'src/Hero.tsx', hunkIndex: 1 },
+    invalid: { type: 'git.discard.hunk', path: 'src/Hero.tsx', hunkIndex: -1 },
+  },
+  {
+    name: 'git.commit.undo',
+    schema: WorkspaceClientMessageSchema,
+    wire: 'client',
+    valid: { type: 'git.commit.undo' },
+    invalid: { type: 'git.commit.undo', requestId: '' },
+  },
+  {
     name: 'pty.spawn',
     schema: WorkspaceClientMessageSchema,
     wire: 'client',
@@ -570,7 +584,13 @@ const samples: Sample[] = [
     name: 'test.run',
     schema: WorkspaceClientMessageSchema,
     wire: 'client',
-    valid: { type: 'test.run', file: 'src/a.test.ts', watch: false },
+    valid: {
+      type: 'test.run',
+      file: 'src/a.test.ts',
+      watch: false,
+      testNamePattern: 'Hero',
+      onlyFailed: true,
+    },
     invalid: { type: 'test.run', watch: 'yes' },
   },
   {
@@ -649,8 +669,27 @@ const samples: Sample[] = [
     wire: 'server',
     valid: {
       type: 'test.finished',
-      status: 'passed',
-      summary: { passed: 1, failed: 0, skipped: 0, durationMs: 12 },
+      status: 'failed',
+      summary: { passed: 1, failed: 1, skipped: 0, durationMs: 12 },
+      report: {
+        summary: { passed: 1, failed: 1, skipped: 0, durationMs: 12 },
+        files: [
+          {
+            path: 'src/a.test.ts',
+            status: 'failed',
+            tests: [
+              {
+                name: 'adds',
+                fullName: 'math adds',
+                status: 'failed',
+                durationMs: 3,
+                failureMessages: ['expected 2'],
+                location: { line: 4, column: 2 },
+              },
+            ],
+          },
+        ],
+      },
     },
     invalid: { type: 'test.finished', status: 'error', summary: {} },
   },
@@ -693,7 +732,15 @@ const samples: Sample[] = [
     wire: 'server',
     valid: {
       type: 'git.status.result',
-      status: { branch: 'main', clean: false, conflicted: [], dirty: ['src/Hero.tsx'] },
+      status: {
+        branch: 'main',
+        clean: false,
+        conflicted: [],
+        dirty: ['src/Hero.tsx'],
+        ahead: 1,
+        behind: 0,
+        ghAvailable: true,
+      },
     },
     invalid: { type: 'git.status.result', status: { branch: 'main' } },
   },
@@ -731,7 +778,7 @@ const samples: Sample[] = [
     wire: 'server',
     valid: {
       type: 'git.log.result',
-      commits: [{ hash: 'abc123', subject: 'feat: purple button', at: 1 }],
+      commits: [{ hash: 'abc123', subject: 'feat: purple button', at: 1, pushed: false }],
     },
     invalid: { type: 'git.log.result', commits: [{ hash: '', subject: 'x', at: 1 }] },
   },
@@ -748,6 +795,20 @@ const samples: Sample[] = [
     wire: 'server',
     valid: { type: 'git.pr.create.result', url: 'https://github.com/acme/app/pull/1' },
     invalid: { type: 'git.pr.create.result', url: '' },
+  },
+  {
+    name: 'git.discard.hunk.result',
+    schema: WorkspaceServerMessageSchema,
+    wire: 'server',
+    valid: { type: 'git.discard.hunk.result', path: 'src/Hero.tsx', hunkIndex: 0 },
+    invalid: { type: 'git.discard.hunk.result', path: 'src/Hero.tsx', hunkIndex: 1.5 },
+  },
+  {
+    name: 'git.commit.undo.result',
+    schema: WorkspaceServerMessageSchema,
+    wire: 'server',
+    valid: { type: 'git.commit.undo.result', hash: 'abc123' },
+    invalid: { type: 'git.commit.undo.result', hash: '' },
   },
   {
     name: 'pty.spawn.result',

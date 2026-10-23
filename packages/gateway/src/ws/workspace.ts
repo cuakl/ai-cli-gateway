@@ -26,17 +26,24 @@ import { RunCancelledError, type RunLease } from '../threads/scheduler.js';
 import { ThreadStoreError } from '../threads/store.js';
 import { loadPreviousConversation } from '../threads/transcript.js';
 import type { ServerDeps } from '../types.js';
-import { commit, getDiff, gitLog, gitStatus, inspectWorkingTree, revert } from '../workspace/git-service.js';
+import { suggestCommitMessage } from '../workspace/commit-suggest.js';
+import {
+  commit,
+  createBranch,
+  createPullRequest,
+  discardHunk,
+  getDiff,
+  GitOpError,
+  gitLog,
+  gitStatus,
+  inspectWorkingTree,
+  revert,
+  undoCommit,
+} from '../workspace/git-service.js';
 import { spawnPty, type PtySession } from '../workspace/pty-service.js';
 import { runTests } from '../workspace/test-service.js';
 
 const WS_OPEN = 1;
-
-const NOT_IMPLEMENTED = new Set<WorkspaceClientMessage['type']>([
-  'git.branch.create',
-  'git.pr.create',
-  'commit.suggest',
-]);
 
 interface TrackedRun {
   runId: string;
@@ -52,12 +59,12 @@ interface LivePty {
 
 /**
  * Multiplexed project socket: agent runs, threads, git, PTY, and tests.
- * Branches and commit suggestions reply `not_implemented`.
  */
 export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps): void {
   const runs = new Map<string, TrackedRun>();
   const ptys = new Map<string, LivePty>();
   const tests = new Map<string, AbortController>();
+  const lastFailedTestFiles = new Map<string, string[]>();
   const acceptLocks = new Map<string, Promise<void>>();
 
   const withAcceptLock = (id: string, fn: () => Promise<void>): Promise<void> => {
@@ -145,15 +152,6 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         return;
       }
       const message = parsed.data;
-      if (NOT_IMPLEMENTED.has(message.type)) {
-        reply({
-          type: 'error',
-          ...(message.requestId ? { requestId: message.requestId } : {}),
-          code: 'not_implemented',
-          message: `${message.type} is not available yet`,
-        });
-        return;
-      }
       try {
         await dispatch(message);
       } catch (error) {
@@ -292,6 +290,49 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
           });
           return;
         }
+        case 'git.branch.create': {
+          const name = await createBranch(project.root, message.name);
+          reply({
+            type: 'git.branch.create.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            name,
+          });
+          return;
+        }
+        case 'git.pr.create': {
+          const created = await createPullRequest(project.root, {
+            title: message.title,
+            body: message.body,
+            base: message.base,
+          });
+          reply({
+            type: 'git.pr.create.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            url: created.url,
+          });
+          return;
+        }
+        case 'git.discard.hunk': {
+          await discardHunk(project.root, message.path, message.hunkIndex);
+          reply({
+            type: 'git.discard.hunk.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            path: message.path,
+            hunkIndex: message.hunkIndex,
+          });
+          broadcast(projectId, { type: 'git.changed', summary: await getDiff(project.root) });
+          return;
+        }
+        case 'git.commit.undo': {
+          const hash = await undoCommit(project.root);
+          reply({
+            type: 'git.commit.undo.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            hash,
+          });
+          broadcast(projectId, { type: 'git.changed', summary: await getDiff(project.root) });
+          return;
+        }
         case 'pty.spawn':
           await spawnShell(message);
           return;
@@ -320,6 +361,21 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         case 'test.stop':
           stopTests();
           return;
+        case 'commit.suggest': {
+          const suggestion = await suggestCommitMessage(
+            deps,
+            principal,
+            project.root,
+            projectId,
+            message.paths,
+          );
+          reply({
+            type: 'commit.suggest.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            message: suggestion,
+          });
+          return;
+        }
         default:
           return;
       }
@@ -544,6 +600,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       tests.set(projectId, controller);
       const startedAt = Date.now();
       const requestId = message.requestId;
+      const previousFailed = lastFailedTestFiles.get(projectId);
       try {
         const result = await runTests(
           project.root,
@@ -555,19 +612,30 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
             });
           },
           controller.signal,
-          file,
+          {
+            ...(file ? { file } : {}),
+            ...(message.testNamePattern ? { testNamePattern: message.testNamePattern } : {}),
+            ...(message.onlyFailed && previousFailed?.length ? { failedFiles: previousFailed } : {}),
+          },
         );
         const cancelled = controller.signal.aborted || result.exitCode === 130;
+        if (result.report) {
+          lastFailedTestFiles.set(
+            projectId,
+            result.report.files.filter((entry) => entry.status === 'failed').map((entry) => entry.path),
+          );
+        }
         broadcast(projectId, {
           type: 'test.finished',
           ...(requestId ? { requestId } : {}),
           status: cancelled ? 'cancelled' : result.exitCode === 0 ? 'passed' : 'failed',
-          summary: {
+          summary: result.report?.summary ?? {
             passed: !cancelled && result.exitCode === 0 ? 1 : 0,
             failed: !cancelled && result.exitCode !== 0 ? 1 : 0,
             skipped: 0,
             durationMs: Date.now() - startedAt,
           },
+          ...(result.report ? { report: result.report } : {}),
         });
       } finally {
         tests.delete(projectId);
@@ -646,6 +714,7 @@ async function resumeSessionId(deps: ServerDeps, thread: Thread, provider: Threa
 
 function asFailure(error: unknown): { code: string; message: string } {
   if (error instanceof HttpError) return { code: error.code, message: error.message };
+  if (error instanceof GitOpError) return { code: error.code, message: error.message };
   if (error instanceof ThreadStoreError) return { code: 'thread_store', message: error.message };
   if (error instanceof PathEscapeError) return { code: 'path_escape', message: error.message };
   const message = error instanceof Error ? error.message : 'Request failed';
