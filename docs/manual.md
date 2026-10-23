@@ -107,7 +107,15 @@ Starting another run aborts the one in progress.
 
 ## Add the overlay to a Vite app
 
-Install the workspace package, or depend on `@aidev/vite` from this repo, and register it:
+From the app directory, `aidev init` detects the package manager (lockfile) and the framework. For Vite it prints the install command and, when `vite.config.(ts|js|mjs)` has a `plugins: [` array, inserts the plugin. It never runs the install. `--dry-run` prints the diff and leaves the file unchanged.
+
+```bash
+cd my-app
+npx aidev init
+pnpm add -D @aidev/vite   # or npm/yarn/bun, as printed
+```
+
+The edit it applies is:
 
 ```ts
 import { defineConfig } from 'vite';
@@ -118,6 +126,28 @@ export default defineConfig({
   plugins: [react(), aiDevtools()],
 });
 ```
+
+If the config has no `plugins: [` array, or the app is Next.js / not Vite, `aidev init` prints the snippet instead of editing.
+
+### Script tag (Next.js and other non-Vite apps)
+
+Start the gateway, register the app origin, and load the overlay IIFE the gateway serves at `/overlay.js`:
+
+```bash
+npx aidev start
+npx aidev projects add . --origin http://localhost:3000
+```
+
+```html
+<script>
+  globalThis.__AI_DEVTOOLS__ = { gatewayUrl: 'http://127.0.0.1:4100' };
+</script>
+<script src="http://127.0.0.1:4100/overlay.js"></script>
+```
+
+Put that in the document `<head>` (a Next.js App Router root layout works). Register the origin your dev server actually uses. Component names come from React Fiber when it is present; otherwise the inspector shows the DOM path and `data-loc` is absent.
+
+### What the plugin does
 
 During `serve` the plugin does four things:
 
@@ -430,10 +460,11 @@ The `@aidev/gateway` package ships a `bin` named `aidev` (Node's `util.parseArgs
 
 | Command | What it does |
 | --- | --- |
-| `aidev start [--port N] [--detach]` | Listen on loopback. `--detach` respawns itself, writes `$AIDEV_HOME/gateway.pid`, and appends `$AIDEV_HOME/logs/gateway.log`. |
-| `aidev stop` | Signals the pid file and removes it. |
-| `aidev status` | Calls `/health` and `/api/v1/status` with the machine token and prints projects, active runs, and providers. |
+| `aidev start [--port N] [--detach]` | Listen on loopback. `--detach` respawns itself, writes `$AIDEV_HOME/gateway.pid` with the child pid (before waiting for `/health`), and appends `$AIDEV_HOME/logs/gateway.log`. |
+| `aidev stop` | Signals the pid file and removes it. If the pid file is missing but `/health` on the configured port reports this gateway's version, calls `POST /api/v1/shutdown` with the machine token. |
+| `aidev status` | Calls `/health` and `/api/v1/status` with the machine token and prints projects, active runs, and providers. Does not need the pid file. |
 | `aidev doctor` | Prints each provider's availability, binary path, and `<bin> --version`. |
+| `aidev init [--dry-run]` | Detects the package manager and Vite/Next/plain. For Vite, prints `<pm> add -D @aidev/vite` and edits `vite.config.*` when it can. Never installs. |
 | `aidev projects add <path> [--origin URL]` | Registers the root over HTTP when the gateway is up, otherwise writes it into `config.json`. |
 | `aidev open` | Prints `http://127.0.0.1:<port>/` and opens it. That page is a placeholder until the dashboard exists. |
 
@@ -444,7 +475,7 @@ There is no API-key variable. Each CLI keeps its own login.
 ## Safeguards
 
 - **Loopback.** The default bind is `127.0.0.1`. Set `HOST` only when you intend the port to be reachable from somewhere else.
-- **Machine token.** The first start writes `~/.aidev/token` (mode `0600`, 32 random bytes, base64url). Every `/api/v1/*` route and every WebSocket requires `Authorization: Bearer <token>` or `?token=`. `GET /health` stays open and returns only `{ status, version }`.
+- **Machine token.** The first start writes `~/.aidev/token` (mode `0600`, 32 random bytes, base64url). Every `/api/v1/*` route and every WebSocket requires `Authorization: Bearer <token>` or `?token=`. `GET /health` stays open and returns only `{ status, version }`. `POST /api/v1/shutdown` accepts only the machine token; browser and inference tokens get 403.
 - **Inference tokens.** `POST /api/v1/infer` and `/v1/*` also accept a token listed in `config.json` `inferenceTokens`. Browser tokens are rejected on those routes.
 - **Browser tokens.** `POST /api/v1/projects/register` (machine token) takes `{ root, origin }` and returns `{ projectId, browserToken }`. The browser token lives in memory, is scoped to that project, and is re-issued when the dev server registers again after a restart. Re-registering the same root keeps the project id and may add an origin.
 - **CORS.** `Access-Control-Allow-Origin` is set only for origins registered by a project (and the gateway's own origin after it binds). Any other `Origin`, including `https://evil.example`, gets no CORS header. Requests with no `Origin` (curl, Node) are allowed when the token is valid. A WebSocket upgrade with a non-allowlisted `Origin` is rejected.
@@ -460,6 +491,8 @@ There is no API-key variable. Each CLI keeps its own login.
 **The toolbar never appears.** The plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart `vite` after `pnpm build` so it picks up the overlay bundle. The page source should contain `/@ai-devtools/overlay.js`.
 
 **The status dot stays idle.** The project WebSocket did not open. The plugin auto-starts the gateway unless `autoStart` is false. If it is still down, run `npx aidev start`, or set `GATEWAY_URL` to the gateway you already started.
+
+**`aidev stop` says the gateway is not running.** Stop reads `$AIDEV_HOME/gateway.pid` (default `~/.aidev`). A detached start writes that file with the child pid before `/health` succeeds. If the file is missing, stop still shuts the process down when `/health` on the configured port reports this version, using `POST /api/v1/shutdown` and the machine token. `aidev status` uses `/health` and does not need the pid file.
 
 **`provider_unavailable`.** The binary is not on `PATH` and not in the lookup paths above. The response `setup` array is the short version of what to install and which command to run once so the CLI can sign in.
 

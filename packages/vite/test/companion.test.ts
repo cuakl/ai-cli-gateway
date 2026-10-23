@@ -101,7 +101,13 @@ describe('gateway companion', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const call = spawnMock.mock.calls[0];
     expect(call?.[0]).toBe(process.execPath);
-    expect(call?.[1]).toEqual([expect.stringMatching(/[/\\]dist[/\\]cli\.js$/), 'start', '--detach']);
+    expect(call?.[1]).toEqual([
+      expect.stringMatching(/[/\\]dist[/\\]cli\.js$/),
+      'start',
+      '--detach',
+      '--port',
+      '4100',
+    ]);
     expect(call?.[2]).toEqual(expect.objectContaining({ detached: true, stdio: 'ignore' }));
     expect(warn).not.toHaveBeenCalled();
 

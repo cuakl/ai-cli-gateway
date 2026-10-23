@@ -4,6 +4,7 @@ import path from 'node:path';
 import { providerSetup } from '@aidev/adapters';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
+import { ensureHome, readConfig, writeConfig } from '../src/home.js';
 import { isRecord, postJson, requestJson, startTestServer, type TestServer } from './helpers.js';
 import { runtimeFor, ScriptedAdapter } from './scripted-adapter.js';
 
@@ -182,6 +183,45 @@ describe('auth, CORS, and project scope', () => {
       `${server.url.replace('http', 'ws')}/api/v1/projects/${idB}/ws?token=${encodeURIComponent(tokenA)}`,
     );
     expect(failure).toMatch(/403|4403/);
+  });
+
+  it('lets only the machine token call POST /api/v1/shutdown', async () => {
+    const home = await tempDir('shutdown-home-');
+    await ensureHome(home);
+    await writeConfig(home, { ...(await readConfig(home)), inferenceTokens: ['inf_shutdown'] });
+    const server = await startTestServer({
+      home,
+      registerDefaultRoot: false,
+      authenticateFetch: false,
+      runtime: runtimeFor({
+        cursor: new ScriptedAdapter('cursor', async () => ({ exitCode: 0, summary: '' })),
+      }),
+    });
+    servers.push(server);
+    const root = await tempDir('shutdown-root-');
+    const registered = await postJson(
+      `${server.url}/api/v1/projects/register`,
+      { root, origin: 'http://localhost:5173' },
+      { headers: { authorization: `Bearer ${server.token}` } },
+    );
+    expect(isRecord(registered.body)).toBe(true);
+    if (!isRecord(registered.body)) return;
+    const browser = await postJson(
+      `${server.url}/api/v1/shutdown`,
+      {},
+      { headers: { authorization: `Bearer ${String(registered.body.browserToken)}` } },
+    );
+    expect(browser.status).toBe(403);
+    const inference = await postJson(
+      `${server.url}/api/v1/shutdown`,
+      {},
+      { headers: { authorization: `Bearer inf_shutdown` } },
+    );
+    expect(inference.status).toBe(403);
+    const missing = await postJson(`${server.url}/api/v1/shutdown`, {});
+    expect(missing.status).toBe(401);
+    const stillUp = await requestJson(`${server.url}/health`);
+    expect(stillUp.status).toBe(200);
   });
 
   it('refuses a project WebSocket and therefore a PTY when the token is missing', async () => {

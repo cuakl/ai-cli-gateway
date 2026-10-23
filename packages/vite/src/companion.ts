@@ -50,9 +50,12 @@ export async function ensureGateway(options: EnsureGatewayOptions): Promise<bool
   }
   try {
     const bin = (options.resolveBin ?? resolveGatewayBin)();
+    const args = [bin, 'start', '--detach'];
+    const port = portFromGatewayUrl(options.gatewayUrl);
+    if (port) args.push('--port', port);
     const child: ChildProcess = (options.spawnImpl ?? spawn)(
       process.execPath,
-      [bin, 'start', '--detach'],
+      args,
       {
         detached: true,
         stdio: 'ignore',
@@ -96,6 +99,15 @@ async function waitForHealth(gatewayUrl: string, fetchImpl: typeof fetch, deadli
     await delay(Math.min(HEALTH_POLL_MS, remaining));
   }
   return false;
+}
+
+function portFromGatewayUrl(gatewayUrl: string): string | undefined {
+  try {
+    const port = new URL(gatewayUrl).port;
+    return port || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function delay(ms: number): Promise<void> {

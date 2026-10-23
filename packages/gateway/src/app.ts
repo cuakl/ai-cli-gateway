@@ -15,6 +15,7 @@ import { registerInferRoutes } from './routes/infer.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerPromptRoutes } from './routes/prompt.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { registerShutdownRoutes } from './routes/shutdown.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerThreadRoutes } from './routes/threads.js';
 import { createDefaultRuntime, type GatewayRuntime } from './runtime.js';
@@ -159,6 +160,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerDashboardRoutes(app);
   registerHealthRoutes(app, deps);
   registerStatusRoutes(app, deps);
+  registerShutdownRoutes(app);
   registerProjectRoutes(app, deps);
   registerPromptRoutes(app, deps);
   registerInferRoutes(app, deps);

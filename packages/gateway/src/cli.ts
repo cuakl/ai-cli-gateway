@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, type ChildProcess } from 'node:child_process';
-import { openSync } from 'node:fs';
+import { closeSync, openSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { createAdapter, getProviderCapabilities, type ProviderType } from '@aide
 import { startServer } from './app.js';
 import { CLI_NAME } from './brand.js';
 import { ensureHome, readConfig, readMachineToken, resolveAidevHome, writeConfig } from './home.js';
+import { runInit } from './init.js';
 import { ProjectRegistry } from './projects/registry.js';
 import { GATEWAY_VERSION } from './version.js';
 
@@ -19,6 +20,7 @@ const USAGE = `Usage: ${CLI_NAME} <command>
   stop                          Stop the detached gateway.
   status                        Print health, projects, and active runs.
   doctor [--live]               Print provider capabilities. --live asks each CLI to reply OK.
+  init [--dry-run]              Detect the app and print or apply setup. Never installs.
   projects add <path> [--origin URL]
                                 Register a project root.
   open                          Print and open the dashboard URL.
@@ -39,6 +41,7 @@ export async function run(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
   io: CliIo = defaultIo,
+  cwd = process.cwd(),
 ): Promise<number | null> {
   const [command, ...rest] = argv;
   if (!command || command === 'help' || command === '--help' || command === '-h') {
@@ -52,6 +55,7 @@ export async function run(
       detach: { type: 'boolean', default: false },
       origin: { type: 'string' },
       live: { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
     },
     allowPositionals: true,
     strict: true,
@@ -65,6 +69,8 @@ export async function run(
       return commandStatus(env, io);
     case 'doctor':
       return commandDoctor(io, values.live === true);
+    case 'init':
+      return runInit(cwd, values['dry-run'] === true, io);
     case 'projects':
       return commandProjects(positionals, values.origin, env, io);
     case 'open':
@@ -92,6 +98,10 @@ async function commandStart(
   if (env.AIDEV_HOME) process.env.AIDEV_HOME = env.AIDEV_HOME;
   const app = await startServer();
   await writeFile(path.join(home, 'gateway.pid'), `${process.pid}\n`, { mode: 0o600 });
+  // POST /api/v1/shutdown only closes the app; live PTYs or timers would keep the process up.
+  app.server.once('close', () => {
+    void rm(path.join(home, 'gateway.pid'), { force: true }).finally(() => process.exit(0));
+  });
   let closing = false;
   const shutdown = (signal: NodeJS.Signals): void => {
     if (closing) return;
@@ -105,8 +115,15 @@ async function commandStart(
       },
     );
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  const onSigint = (): void => shutdown('SIGINT');
+  const onSigterm = (): void => shutdown('SIGTERM');
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+  app.server.once('close', () => {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
+    void rm(path.join(home, 'gateway.pid'), { force: true });
+  });
   return null;
 }
 
@@ -114,15 +131,30 @@ async function detachStart(home: string, port: number, env: NodeJS.ProcessEnv, i
   const logs = path.join(home, 'logs');
   await mkdir(logs, { recursive: true });
   const logPath = path.join(logs, 'gateway.log');
+  const pidFile = path.join(home, 'gateway.pid');
   const fd = openSync(logPath, 'a');
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--port', String(port)], {
-    detached: true,
-    stdio: ['ignore', fd, fd],
-    env: { ...env, PORT: String(port), AIDEV_HOME: home },
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--port', String(port)], {
+      detached: true,
+      stdio: ['ignore', fd, fd],
+      env: { ...env, PORT: String(port), AIDEV_HOME: home },
+    });
+  } finally {
+    closeSync(fd);
+  }
+  if (child.pid) await writeFile(pidFile, `${child.pid}\n`, { mode: 0o600 });
   child.unref();
   const ok = await waitForHealth(`http://127.0.0.1:${port}/health`, 5_000);
   if (!ok) {
+    if (child.pid) {
+      try {
+        process.kill(child.pid, 'SIGTERM');
+      } catch {
+        // The child never started.
+      }
+    }
+    await rm(pidFile, { force: true });
     io.stderr(`aidev gateway failed to start. See ${logPath}`);
     return 1;
   }
@@ -133,38 +165,87 @@ async function detachStart(home: string, port: number, env: NodeJS.ProcessEnv, i
 async function commandStop(env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
   const home = resolveAidevHome(env);
   const pidFile = path.join(home, 'gateway.pid');
-  let pid = 0;
+  const pid = await readPidFile(pidFile);
+  if (pid && alive(pid)) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!alive(pid)) {
+        await rm(pidFile, { force: true });
+        io.stdout(`aidev gateway stopped (pid ${pid})`);
+        return 0;
+      }
+      await delay(100);
+    }
+    io.stderr(`aidev gateway (pid ${pid}) did not exit`);
+    return 1;
+  }
+  await rm(pidFile, { force: true });
+  return stopViaShutdown(home, io);
+}
+
+async function readPidFile(pidFile: string): Promise<number | null> {
   try {
-    pid = Number((await readFile(pidFile, 'utf8')).trim());
+    const pid = Number((await readFile(pidFile, 'utf8')).trim());
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+async function stopViaShutdown(home: string, io: CliIo): Promise<number> {
+  let token = '';
+  let port = 4100;
+  try {
+    token = await readMachineToken(home);
+    const config = await readConfig(home);
+    if (config.port) port = config.port;
   } catch {
     io.stdout('aidev gateway is not running');
     return 0;
   }
-  if (!Number.isInteger(pid) || pid <= 0) {
-    await rm(pidFile, { force: true });
+  const base = `http://127.0.0.1:${port}`;
+  if (!(await healthIsOurs(`${base}/health`))) {
     io.stdout('aidev gateway is not running');
     return 0;
   }
   try {
-    process.kill(pid, 'SIGTERM');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-      await rm(pidFile, { force: true });
-      io.stdout('aidev gateway is not running');
-      return 0;
+    const response = await fetch(`${base}/api/v1/shutdown`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      io.stderr(`shutdown failed (${response.status})`);
+      return 1;
     }
-    throw error;
+  } catch {
+    io.stdout('aidev gateway is not running');
+    return 0;
   }
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (!alive(pid)) {
-      await rm(pidFile, { force: true });
-      io.stdout(`aidev gateway stopped (pid ${pid})`);
+    if (!(await healthIsOurs(`${base}/health`))) {
+      io.stdout(`aidev gateway stopped (http://127.0.0.1:${port})`);
       return 0;
     }
     await delay(100);
   }
-  io.stderr(`aidev gateway (pid ${pid}) did not exit`);
+  io.stderr(`aidev gateway on port ${port} did not exit`);
   return 1;
+}
+
+async function healthIsOurs(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(400) });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { status?: string; version?: string };
+    return body.status === 'ok' && body.version === GATEWAY_VERSION;
+  } catch {
+    return false;
+  }
 }
 
 async function commandStatus(env: NodeJS.ProcessEnv, io: CliIo): Promise<number> {
