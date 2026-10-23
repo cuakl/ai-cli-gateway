@@ -6,6 +6,7 @@ import { ElementPicker } from '../inspector/picker.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type DevtoolsPanel, type ProviderStatus } from '../types.js';
 import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
 import { DiffViewer } from './DiffViewer.js';
+import { XIcon } from './icons.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
 import { Toolbar } from './Toolbar.js';
@@ -324,8 +325,15 @@ export function App({ config }: AppProps) {
           >
             Review diffs
           </button>
-          <button type="button" className="icon-button" data-action="dismiss-notice" onClick={() => setNotice(null)}>
-            ✕
+          <button
+            type="button"
+            className="icon-button"
+            data-action="dismiss-notice"
+            aria-label="Dismiss notice"
+            title="Dismiss notice"
+            onClick={() => setNotice(null)}
+          >
+            <XIcon />
           </button>
         </div>
       ) : null}

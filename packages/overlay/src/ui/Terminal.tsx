@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
+import { XIcon } from './icons.js';
+import { AID_MONO, DARK_PALETTE } from './theme/tokens.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TerminalPanelProps {
@@ -40,9 +42,13 @@ export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPa
         if (cancelled) return;
         term = new Terminal({
           cursorBlink: true,
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontFamily: AID_MONO,
           fontSize: 12,
-          theme: { background: '#0e1016', foreground: '#e7edf8', cursor: '#c4b5fd' },
+          theme: {
+            background: DARK_PALETTE.bg,
+            foreground: DARK_PALETTE.text,
+            cursor: DARK_PALETTE.accent,
+          },
         });
         const fit = new FitAddon();
         term.loadAddon(fit);
@@ -120,8 +126,15 @@ export function TerminalPanel({ workspace, hidden = false, onClose }: TerminalPa
           <p className="kicker">Project shell</p>
           <h2>Terminal</h2>
         </div>
-        <button type="button" className="icon-button" data-action="close-terminal" onClick={onClose}>
-          ✕
+        <button
+          type="button"
+          className="icon-button"
+          data-action="close-terminal"
+          aria-label="Close terminal"
+          title="Close terminal"
+          onClick={onClose}
+        >
+          <XIcon />
         </button>
       </header>
       {error ? <p className="banner">{error}</p> : null}

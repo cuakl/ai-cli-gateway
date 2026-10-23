@@ -34,7 +34,9 @@ describe('initDevtools', () => {
     expect(shadow?.querySelector('#ai-devtools-root')).toBeTruthy();
     expect(shadow?.querySelector('style')?.textContent).toContain('#ai-devtools-root');
     expect(first?.style.fontFamily).toContain('ui-sans-serif');
-    expect(first?.style.color.toLowerCase()).toBe('#f5f7fb');
+    expect(first?.style.color.toLowerCase()).toBe('#e7e9ee');
+    expect(first?.style.fontSize).toBe('14px');
+    expect(first?.getAttribute('data-theme')).toBe('dark');
     expect(shadow?.querySelector('[data-action="inspect"]')).toBeTruthy();
     expect(document.querySelector('#ai-devtools-root')).toBeNull();
   });

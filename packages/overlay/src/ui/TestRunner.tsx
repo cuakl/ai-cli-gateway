@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { XIcon } from './icons.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface TestRunnerProps {
@@ -69,8 +70,15 @@ export function TestRunner({ workspace, projectName, onClose }: TestRunnerProps)
         <span className="badge" data-status={status}>
           {STATUS_LABEL[status]}
         </span>
-        <button type="button" className="icon-button" data-action="close-tests" onClick={onClose}>
-          ✕
+        <button
+          type="button"
+          className="icon-button"
+          data-action="close-tests"
+          aria-label="Close tests"
+          title="Close tests"
+          onClick={onClose}
+        >
+          <XIcon />
         </button>
       </header>
       <div className="test-toolbar">

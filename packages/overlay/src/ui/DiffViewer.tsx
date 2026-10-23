@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import type { GitDiffFile, GitDiffHunk, GitDiffSummary } from '@aidev/protocol';
+import { XIcon } from './icons.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
 export interface DiffViewerProps {
@@ -81,8 +82,15 @@ export function DiffViewer({ workspace, summary, loading, error, onClose }: Diff
           <p className="kicker">{summary?.branch ?? 'Working tree'}</p>
           <h2>Diffs</h2>
         </div>
-        <button type="button" className="icon-button" data-action="close-diffs" onClick={onClose}>
-          ✕
+        <button
+          type="button"
+          className="icon-button"
+          data-action="close-diffs"
+          aria-label="Close diffs"
+          title="Close diffs"
+          onClick={onClose}
+        >
+          <XIcon />
         </button>
       </header>
       {error ? <p className="banner">{error}</p> : null}

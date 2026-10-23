@@ -66,6 +66,10 @@ describe('ElementPicker', () => {
     expect(box?.style.height).toBe('48px');
     expect(box?.style.transition).toContain('top');
     expect(box?.textContent).toBe('div#id.class (320x48)');
+    const label = box?.firstElementChild as HTMLElement | null;
+    expect(label?.style.fontFamily).toContain('ui-sans-serif');
+    expect(label?.style.fontSize).toBe('12px');
+    expect(label?.style.color.toLowerCase()).toBe('#e7e9ee');
     target.remove();
   });
 

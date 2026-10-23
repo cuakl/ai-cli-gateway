@@ -1,5 +1,6 @@
 import type { ProviderType, SelectedElement } from '@aidev/protocol';
 import { selectionChipLabel } from '../inspector/locator.js';
+import { XIcon } from './icons.js';
 
 export interface ChatLine {
   id: string;
@@ -66,8 +67,15 @@ export function ChatDrawer({
           <h2>Chat</h2>
         </div>
         <span className="muted">{gatewayLabel}</span>
-        <button type="button" className="icon-button" data-action="close-chat" onClick={onClose}>
-          ✕
+        <button
+          type="button"
+          className="icon-button"
+          data-action="close-chat"
+          aria-label="Close chat"
+          title="Close chat"
+          onClick={onClose}
+        >
+          <XIcon />
         </button>
       </header>
       {selected ? (
@@ -79,9 +87,10 @@ export function ChatDrawer({
               className="icon-button"
               data-action="clear-selection"
               aria-label="Clear selection"
+              title="Clear selection"
               onClick={onClearSelection}
             >
-              ✕
+              <XIcon />
             </button>
           </div>
         </div>

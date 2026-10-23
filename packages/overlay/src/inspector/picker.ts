@@ -1,4 +1,5 @@
 import { ELEMENT_TAG } from '../brand.js';
+import { AID_FONT, AID_Z_HOST, DARK_PALETTE } from '../ui/theme/tokens.js';
 
 export const HIGHLIGHT_ID = 'ai-devtools-highlight';
 
@@ -157,11 +158,11 @@ export class ElementPicker {
       margin: '0',
       padding: '0',
       pointerEvents: 'none',
-      zIndex: '2147483646',
+      zIndex: String(AID_Z_HOST - 1),
       boxSizing: 'border-box',
-      background: 'rgba(124, 92, 255, 0.16)',
-      outline: '2px solid #7c5cff',
-      borderRadius: '4px',
+      background: 'rgba(124, 108, 255, 0.16)',
+      outline: `2px solid ${DARK_PALETTE.accent}`,
+      borderRadius: '6px',
       transition: 'top 60ms ease, left 60ms ease, width 60ms ease, height 60ms ease',
     });
     const label = document.createElement('div');
@@ -174,11 +175,11 @@ export class ElementPicker {
       transform: 'translateY(calc(-100% - 4px))',
       padding: '3px 8px',
       borderRadius: '6px',
-      background: '#1c1830',
-      color: '#f5f7fb',
-      fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      background: DARK_PALETTE.bgRaised,
+      color: DARK_PALETTE.text,
+      fontFamily: AID_FONT,
       fontSize: '12px',
-      lineHeight: '1.4',
+      lineHeight: '1.5',
       fontWeight: '560',
       whiteSpace: 'nowrap',
       pointerEvents: 'none',

@@ -22,7 +22,7 @@ export {
   PRODUCT_NAME,
   SCOPE,
 } from './brand.js';
-export type { DevtoolsConfig, DevtoolsPanel, ProviderStatus } from './types.js';
+export type { DevtoolsConfig, DevtoolsPanel, OverlayTheme, ProviderStatus } from './types.js';
 export {
   WorkspaceClient,
   WorkspaceError,

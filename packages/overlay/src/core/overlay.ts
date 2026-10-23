@@ -1,15 +1,23 @@
 import { h, render } from 'preact';
 import { GLOBAL_CONFIG_KEY } from '../brand.js';
 import { installContextCollectors } from '../context/index.js';
-import { OVERLAY_CSS, OVERLAY_FONT, OVERLAY_TEXT } from '../styles.js';
-import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig } from '../types.js';
+import { OVERLAY_CSS } from '../styles.js';
+import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig, type OverlayTheme } from '../types.js';
 import { App } from '../ui/App.js';
+import {
+  AID_FONT,
+  AID_Z_HOST,
+  DARK_PALETTE,
+  LIGHT_PALETTE,
+  parseTheme,
+} from '../ui/theme/tokens.js';
 
 interface InjectedDevtoolsConfig {
   gatewayUrl?: string;
   projectName?: string;
   projectId?: string;
   browserToken?: string;
+  theme?: OverlayTheme;
 }
 
 export class AiDevtoolsElement extends HTMLElement {
@@ -24,7 +32,10 @@ export class AiDevtoolsElement extends HTMLElement {
 
   configure(config: DevtoolsConfig): void {
     this.config = { ...this.config, ...config };
-    if (this.isConnected) this.paint();
+    if (this.isConnected) {
+      this.applyHostStyles();
+      this.paint();
+    }
   }
 
   connectedCallback(): void {
@@ -56,11 +67,29 @@ export class AiDevtoolsElement extends HTMLElement {
         nonempty(this.getAttribute('browser-token')) ??
         nonempty(injected.browserToken),
       projectName: nonempty(this.config.projectName) ?? nonempty(injected.projectName),
+      theme: this.resolvedTheme(injected),
       workspace: this.config.workspace,
     };
   }
 
+  private resolvedTheme(injected = readInjectedConfig()): OverlayTheme {
+    return (
+      parseTheme(this.config.theme) ??
+      parseTheme(injected.theme) ??
+      parseTheme(this.getAttribute('data-theme')) ??
+      'dark'
+    );
+  }
+
   private applyHostStyles(): void {
+    const theme = this.resolvedTheme();
+    this.setAttribute('data-theme', theme);
+    const prefersLight =
+      theme === 'light' ||
+      (theme === 'system' &&
+        typeof matchMedia === 'function' &&
+        matchMedia('(prefers-color-scheme: light)').matches);
+    const palette = prefersLight ? LIGHT_PALETTE : DARK_PALETTE;
     const style = this.style;
     // `all: initial` keeps the host page from painting this element, but it also
     // resets color and font to the UA initial values (black, usually a serif).
@@ -71,16 +100,16 @@ export class AiDevtoolsElement extends HTMLElement {
     style.setProperty('right', '0');
     style.setProperty('bottom', '0');
     style.setProperty('left', '0');
-    style.setProperty('z-index', '2147483647');
+    style.setProperty('z-index', String(AID_Z_HOST));
     style.setProperty('pointer-events', 'none');
     style.setProperty('display', 'block');
-    style.setProperty('color-scheme', 'dark');
-    style.setProperty('font-family', OVERLAY_FONT);
-    style.setProperty('font-size', '13px');
-    style.setProperty('line-height', '1.45');
+    style.setProperty('color-scheme', theme === 'light' ? 'light' : theme === 'system' ? 'light dark' : 'dark');
+    style.setProperty('font-family', AID_FONT);
+    style.setProperty('font-size', '14px');
+    style.setProperty('line-height', '1.5');
     style.setProperty('font-weight', '400');
     style.setProperty('letter-spacing', '-0.011em');
-    style.setProperty('color', OVERLAY_TEXT);
+    style.setProperty('color', palette.text);
     style.setProperty('-webkit-font-smoothing', 'antialiased');
   }
 
