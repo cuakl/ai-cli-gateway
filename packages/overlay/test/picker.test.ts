@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ElementPicker,
   HIGHLIGHT_ID,
+  HIGHLIGHT_LABEL_ID,
+  MARGIN_BOX_ID,
+  PADDING_BOX_ID,
   describeElement,
   highlightFrame,
 } from '../src/inspector/picker.js';
@@ -35,6 +38,9 @@ describe('ElementPicker', () => {
     picker?.stop();
     picker = null;
     document.getElementById(HIGHLIGHT_ID)?.remove();
+    document.getElementById(HIGHLIGHT_LABEL_ID)?.remove();
+    document.getElementById(MARGIN_BOX_ID)?.remove();
+    document.getElementById(PADDING_BOX_ID)?.remove();
     document.documentElement.style.cursor = '';
     vi.restoreAllMocks();
   });
@@ -65,8 +71,8 @@ describe('ElementPicker', () => {
     expect(box?.style.width).toBe('320px');
     expect(box?.style.height).toBe('48px');
     expect(box?.style.transition).toContain('top');
-    expect(box?.textContent).toBe('div#id.class (320x48)');
-    const label = box?.firstElementChild as HTMLElement | null;
+    const label = document.getElementById(HIGHLIGHT_LABEL_ID);
+    expect(label?.textContent).toContain('div 320×48');
     expect(label?.style.fontFamily).toContain('ui-sans-serif');
     expect(label?.style.fontSize).toBe('12px');
     expect(label?.style.color.toLowerCase()).toBe('#e7e9ee');
@@ -147,5 +153,101 @@ describe('ElementPicker', () => {
     expect(selected).toBe(false);
     expect(document.getElementById(HIGHLIGHT_ID)).toBeNull();
     host.remove();
+  });
+
+  it('walks to a data-loc ancestor with ArrowUp', () => {
+    const card = document.createElement('button');
+    card.setAttribute('data-loc', 'src/CardGrid.tsx:21:1');
+    const price = document.createElement('strong');
+    price.setAttribute('data-loc', 'src/CardGrid.tsx:30:1');
+    card.appendChild(price);
+    document.body.appendChild(card);
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(price);
+    vi.spyOn(price, 'getBoundingClientRect').mockReturnValue(rect(20, 20, 40, 16));
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue(rect(10, 10, 200, 80));
+
+    picker = new ElementPicker({ onSelect: () => undefined });
+    picker.start();
+    price.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 22, clientY: 22 }));
+    expect(picker.hoveredElement).toBe(price);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    expect(picker.hoveredElement).toBe(card);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    expect(picker.hoveredElement).toBe(price);
+    card.remove();
+  });
+
+  it('keeps inspecting on Shift+click so a second element can be added', () => {
+    const first = document.createElement('div');
+    const second = document.createElement('span');
+    document.body.appendChild(first);
+    document.body.appendChild(second);
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(first);
+    const selected: Element[] = [];
+    picker = new ElementPicker({
+      onSelect(element, extras) {
+        if (extras.shift) selected.push(element);
+      },
+    });
+    picker.start();
+    first.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: 1 }));
+    first.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 1, clientY: 1, shiftKey: true }),
+    );
+    expect(picker.active).toBe(true);
+    expect(selected).toEqual([first]);
+    first.remove();
+    second.remove();
+  });
+
+  it('does not swallow clicks on the overlay host while a page node is hovered', () => {
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    const host = document.createElement('ai-devtools');
+    const button = document.createElement('button');
+    host.appendChild(button);
+    document.body.appendChild(host);
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
+    let selected = false;
+    picker = new ElementPicker({
+      onSelect() {
+        selected = true;
+      },
+    });
+    picker.start();
+    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: 1 }));
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 1, clientY: 1 });
+    Object.defineProperty(click, 'composedPath', { value: () => [button, host] });
+    button.dispatchEvent(click);
+    expect(selected).toBe(false);
+    expect(click.defaultPrevented).toBe(false);
+    expect(picker.active).toBe(true);
+    target.remove();
+    host.remove();
+  });
+
+  it('opens the editor on alt+click without picking', () => {
+    const target = document.createElement('button');
+    document.body.appendChild(target);
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
+    let opened: Element | null = null;
+    let selected = false;
+    picker = new ElementPicker({
+      onSelect() {
+        selected = true;
+      },
+      onOpenEditor(element) {
+        opened = element;
+      },
+    });
+    picker.start();
+    target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 2, clientY: 2 }));
+    target.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 2, clientY: 2, altKey: true }),
+    );
+    expect(opened).toBe(target);
+    expect(selected).toBe(false);
+    expect(picker.active).toBe(true);
+    target.remove();
   });
 });

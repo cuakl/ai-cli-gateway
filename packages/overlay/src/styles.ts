@@ -3,6 +3,7 @@ import { CHAT_CSS } from './ui/styles/chat.js';
 import { DIFF_CSS } from './ui/styles/diff.js';
 import { DOCKS_CSS } from './ui/styles/docks.js';
 import { INSPECTOR_BANNER_CSS } from './ui/styles/inspector-banner.js';
+import { INSPECTOR_CSS } from './ui/styles/inspector.js';
 import { MODAL_CSS } from './ui/styles/modal.js';
 import { TERMINAL_CSS } from './ui/styles/terminal.js';
 import { CONSOLE_CSS } from './ui/styles/console.js';
@@ -25,6 +26,7 @@ export const OVERLAY_CSS = [
   TOOLBAR_CSS,
   DOCKS_CSS,
   INSPECTOR_BANNER_CSS,
+  INSPECTOR_CSS,
   CHAT_CSS,
   DIFF_CSS,
   TERMINAL_CSS,

@@ -1035,11 +1035,12 @@ describe('protocol schemas', () => {
       provider: 'cursor',
       mode: 'ask',
       prompt: 'Where is this styled?',
+      attachments: [{ kind: 'image', mime: 'image/png', dataUrl: 'data:image/png;base64,aaa' }],
     });
     expect(started).toMatchObject({
       type: 'run.start',
       context: { recentErrors: [], recentConsoleLogs: [], failedNetworkRequests: [] },
-      attachments: [],
+      attachments: [{ kind: 'image', mime: 'image/png', dataUrl: 'data:image/png;base64,aaa' }],
     });
     expect(InferRequestSchema.parse({ messages: [{ role: 'user', content: 'Hi' }] }).images).toBeUndefined();
   });

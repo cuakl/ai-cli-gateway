@@ -6,7 +6,9 @@ import { promisify } from 'node:util';
 import { WorkspaceServerMessageSchema, createStreamEvent, type WorkspaceServerMessage } from '@aidev/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { isRecord, postJson, startTestServer, type TestServer } from './helpers.js';
+import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
+import { isRecord, postJson, solidPng, startTestServer, type TestServer } from './helpers.js';
 import { runtimeFor, ScriptedAdapter } from './scripted-adapter.js';
 
 const exec = promisify(execFile);
@@ -201,6 +203,47 @@ describe('workspace WebSocket', () => {
     } finally {
       release();
       await closeSocket(starter);
+    }
+  });
+
+  it('writes run.start image attachments under AIDEV_HOME and puts the path in the prompt', async () => {
+    const png = solidPng(255, 0, 0);
+    let seen = '';
+    const adapter = new ScriptedAdapter('cursor', async (ctx) => {
+      seen = ctx.options.prompt;
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'chunk', { text: 'saw it' }));
+      ctx.onEvent(createStreamEvent(ctx.sessionId, 'done', { durationMs: 1 }));
+      return { exitCode: 0, summary: 'saw it' };
+    });
+    const root = await tempDir('ws-attach-img-');
+    const server = await startProject(root, adapter);
+    const project = await register(server, root);
+    const socket = await openSocket(projectWs(server, project.id, project.token));
+    const messages = collect(socket);
+    try {
+      socket.send(
+        JSON.stringify({
+          type: 'run.start',
+          requestId: 'img-1',
+          provider: 'cursor',
+          mode: 'ask',
+          prompt: 'Describe the screenshot',
+          attachments: [{ kind: 'image', mime: 'image/png', dataUrl: `data:image/png;base64,${png.toString('base64')}` }],
+        }),
+      );
+      await messages.waitFor((items) => items.some((item) => item.type === 'run.finished'));
+      const accepted = messages.items.find((item) => item.type === 'run.accepted');
+      expect(accepted && accepted.type === 'run.accepted' ? accepted.runId : '').toMatch(/^run_/);
+      const runId = accepted && accepted.type === 'run.accepted' ? accepted.runId : '';
+      const dir = path.join(server.home, 'attachments', runId);
+      const files = await readdir(dir);
+      expect(files).toEqual(['0.png']);
+      const stored = path.join(dir, '0.png');
+      expect(existsSync(stored)).toBe(true);
+      expect(seen).toContain(stored);
+      expect(seen).toContain('Attached images');
+    } finally {
+      await closeSocket(socket);
     }
   });
 

@@ -1,6 +1,7 @@
 import type { ProviderType, RunMode } from '@aidev/protocol';
 import { useEffect, useId, useRef, useState } from 'preact/hooks';
-import { XIcon } from '../icons.js';
+import type { ScreenshotMode } from '../../context/screenshot.js';
+import { CodeIcon, XIcon } from '../icons.js';
 import { sendShortcutHint } from '../keyboard.js';
 import type { ContextChip } from './model.js';
 
@@ -36,6 +37,10 @@ export interface ComposerProps {
   onPromptChange: (value: string, caret: number) => void;
   onCaret: (caret: number) => void;
   onRemoveChip: (chip: ContextChip) => void;
+  onOpenEditor?: (chip: ContextChip) => void;
+  onBreadcrumb?: (chip: ContextChip, index: number) => void;
+  onScreenshot?: (mode: ScreenshotMode) => void;
+  onAnnotateScreenshot?: (chip: ContextChip) => void;
   onSuggest: (text: string) => void;
   onProviderChange: (provider: ProviderType) => void;
   onModelChange: (model: string | null) => void;
@@ -64,6 +69,10 @@ export function Composer({
   onPromptChange,
   onCaret,
   onRemoveChip,
+  onOpenEditor,
+  onBreadcrumb,
+  onScreenshot,
+  onAnnotateScreenshot,
   onSuggest,
   onProviderChange,
   onModelChange,
@@ -76,6 +85,7 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const listboxId = useId();
   const [activeMention, setActiveMention] = useState(0);
+  const [openCrumb, setOpenCrumb] = useState<string | null>(null);
   const listed = providers.length > 0 ? providers : fallbackProviders();
   const current = listed.find((item) => item.id === provider) ?? listed[0];
   const unavailable = current ? current.available === false : false;
@@ -93,12 +103,16 @@ export function Composer({
 
   useEffect(() => {
     onEscapeOverlay(() => {
+      if (openCrumb) {
+        setOpenCrumb(null);
+        return true;
+      }
       if (!mentionOpen) return false;
       onMentionQuery(null);
       return true;
     });
     return () => onEscapeOverlay(() => false);
-  }, [mentionOpen, onEscapeOverlay, onMentionQuery]);
+  }, [mentionOpen, openCrumb, onEscapeOverlay, onMentionQuery]);
 
   function moveMention(delta: number): void {
     if (mentionOptions.length === 0) return;
@@ -137,24 +151,101 @@ export function Composer({
       {chips.length > 0 ? (
         <div className="chip-row" data-action="chip-row">
           {chips.map((chip) => (
-            <div key={chip.id} className="chip" data-chip={chip.kind} title={chip.preview ?? chip.label}>
-              {chip.thumbnail ? (
-                <img className="chip-thumb" src={chip.thumbnail} alt="" />
-              ) : null}
-              <span>{chip.label}</span>
-              <button
-                type="button"
-                className="icon-button"
-                data-action="remove-chip"
-                data-chip-id={chip.id}
-                aria-label={`Remove ${chip.label}`}
-                title={`Remove ${chip.label}`}
-                onClick={() => onRemoveChip(chip)}
+            <div
+              key={chip.id}
+              className={`chip-wrap${chip.warning ? ' chip-warning' : ''}`}
+            >
+              <div
+                className={`chip${chip.warning ? ' chip-warning' : ''}`}
+                data-chip={chip.kind}
+                title={chip.preview ?? chip.label}
               >
-                <XIcon />
-              </button>
+                {chip.badge ? <span className="chip-badge">{chip.badge}</span> : null}
+                {chip.thumbnail ? (
+                  <button
+                    type="button"
+                    className="chip-thumb-btn"
+                    data-action="annotate-screenshot"
+                    aria-label="Annotate screenshot"
+                    title="Annotate screenshot"
+                    onClick={() => onAnnotateScreenshot?.(chip)}
+                  >
+                    <img className="chip-thumb" src={chip.thumbnail} alt="" />
+                  </button>
+                ) : null}
+                {chip.kind === 'selection' && chip.breadcrumb && chip.breadcrumb.length > 0 ? (
+                  <button
+                    type="button"
+                    className="chip-crumb"
+                    data-action="chip-breadcrumb"
+                    aria-label={`Retarget ${chip.label}`}
+                    title={chip.breadcrumb.join(' › ')}
+                    onClick={() => setOpenCrumb((current) => (current === chip.id ? null : chip.id))}
+                  >
+                    {chip.label}
+                  </button>
+                ) : (
+                  <span>{chip.label}</span>
+                )}
+                {chip.kind === 'selection' && chip.file ? (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    data-action="open-editor"
+                    data-chip-id={chip.id}
+                    aria-label={`Open ${chip.label} in editor`}
+                    title="Open in editor"
+                    onClick={() => onOpenEditor?.(chip)}
+                  >
+                    <CodeIcon size={14} />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="icon-button"
+                  data-action="remove-chip"
+                  data-chip-id={chip.id}
+                  aria-label={`Remove ${chip.label}`}
+                  title={`Remove ${chip.label}`}
+                  onClick={() => onRemoveChip(chip)}
+                >
+                  <XIcon />
+                </button>
+              </div>
+              {openCrumb === chip.id && chip.breadcrumb && chip.breadcrumb.length > 0 ? (
+                <div className="chip-menu" role="menu" data-action="breadcrumb-menu">
+                  {chip.breadcrumb.map((label, index) => (
+                    <button
+                      key={`${chip.id}:${index}`}
+                      type="button"
+                      role="menuitem"
+                      data-action="breadcrumb-item"
+                      data-index={String(index)}
+                      onClick={() => {
+                        setOpenCrumb(null);
+                        onBreadcrumb?.(chip, index);
+                      }}
+                    >
+                      {chip.breadcrumb?.slice(0, index + 1).join(' › ')}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ))}
+        </div>
+      ) : null}
+      {onScreenshot ? (
+        <div className="screenshot-tools" data-action="screenshot-tools">
+          <button type="button" data-action="screenshot-element" onClick={() => onScreenshot('element')}>
+            Element
+          </button>
+          <button type="button" data-action="screenshot-region" onClick={() => onScreenshot('region')}>
+            Region
+          </button>
+          <button type="button" data-action="screenshot-viewport" onClick={() => onScreenshot('viewport')}>
+            Viewport
+          </button>
         </div>
       ) : null}
       <form

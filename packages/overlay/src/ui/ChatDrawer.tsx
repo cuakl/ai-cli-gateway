@@ -1,5 +1,6 @@
 import type { ProviderType, RunMode } from '@aidev/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { ScreenshotMode } from '../context/screenshot.js';
 import { Composer, mentionToken, type MentionOption, type ProviderOption } from './chat/Composer.js';
 import { HistoryList, type HistoryRow } from './chat/HistoryList.js';
 import { Transcript } from './chat/Transcript.js';
@@ -26,6 +27,10 @@ export interface ChatDrawerProps {
   onModelChange: (model: string | null) => void;
   onModeChange: (mode: RunMode) => void;
   onRemoveChip: (chip: ContextChip) => void;
+  onOpenEditor?: (chip: ContextChip) => void;
+  onBreadcrumb?: (chip: ContextChip, index: number) => void;
+  onScreenshot?: (mode: ScreenshotMode) => void;
+  onAnnotateScreenshot?: (chip: ContextChip) => void;
   onSuggest: (text: string) => void;
   onSearchFiles: (query: string) => Promise<string[]>;
   onSubmit: () => void;
@@ -61,6 +66,10 @@ export function ChatDrawer({
   onModelChange,
   onModeChange,
   onRemoveChip,
+  onOpenEditor,
+  onBreadcrumb,
+  onScreenshot,
+  onAnnotateScreenshot,
   onSuggest,
   onSearchFiles,
   onSubmit,
@@ -159,6 +168,10 @@ export function ChatDrawer({
             setMentionQuery(token ? token.query : null);
           }}
           onRemoveChip={onRemoveChip}
+          onOpenEditor={onOpenEditor}
+          onBreadcrumb={onBreadcrumb}
+          onScreenshot={onScreenshot}
+          onAnnotateScreenshot={onAnnotateScreenshot}
           onSuggest={onSuggest}
           onProviderChange={onProviderChange}
           onModelChange={onModelChange}

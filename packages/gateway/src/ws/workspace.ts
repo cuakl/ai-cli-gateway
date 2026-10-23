@@ -21,7 +21,8 @@ import { composePrompt } from '../prompt-context.js';
 import { deleteThreadFully } from '../threads/control.js';
 import { restoreRun } from '../threads/restore.js';
 import { providerSupportsResume } from '../threads/resume.js';
-import { isAgentMode, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from '../threads/run.js';
+import { imagePromptNote, writeRunAttachments } from '../inference/images.js';
+import { isAgentMode, newRunId, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from '../threads/run.js';
 import { RunCancelledError, type RunLease } from '../threads/scheduler.js';
 import { ThreadStoreError } from '../threads/store.js';
 import { loadPreviousConversation } from '../threads/transcript.js';
@@ -435,15 +436,22 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       }
 
       const thread = await openThread(deps, projectId, message);
+      const runId = newRunId();
+      const written = await writeRunAttachments({
+        home: deps.home,
+        runId,
+        images: message.attachments.map((item) => ({ dataUrl: item.dataUrl })),
+      });
       let binding: ThreadRunBinding | undefined;
       let leasePromise: Promise<RunLease> | undefined;
       await withAcceptLock(projectId, async () => {
         const queued = !deps.scheduler.canStart(projectId, message.mode);
         const runRecord = runningRun({
+          id: runId,
           threadId: thread.id,
           prompt: message.prompt,
-          contextSummary: summarizeContext(message.context),
-          attachments: message.attachments,
+          contextSummary: summarizeContext(message.context, written.attachments.length > 0),
+          attachments: written.attachments,
           status: queued ? 'queued' : 'running',
         });
         await deps.threads.updateRun(thread.id, runRecord);
@@ -468,7 +476,6 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         activity(projectId);
       });
       if (!binding || !leasePromise) throw new HttpError(500, 'internal', 'Run was not accepted');
-      const runId = binding.runId;
 
       let lease: RunLease | undefined;
       try {
@@ -503,6 +510,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
       try {
         const resume = await resumeSessionId(deps, thread, message.provider);
         let prompt = composePrompt(message.prompt, message.context);
+        const note = imagePromptNote(written.promptPaths);
+        if (note) prompt = `${prompt}\n\n${note}`;
         if (!resume) {
           const prior = await loadPreviousConversation(deps.threads, thread.id, runId);
           if (prior) prompt = `${prior}\n\n${prompt}`;
@@ -778,7 +787,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
   });
 }
 
-function summarizeContext(context: FrontendContextPayload): ContextSummary {
+function summarizeContext(context: FrontendContextPayload, screenshotAttached = false): ContextSummary {
   const selections: ContextSummary['selections'] = [];
   const selected = context.selectedElement;
   if (selected?.tagName.trim()) {
@@ -797,7 +806,7 @@ function summarizeContext(context: FrontendContextPayload): ContextSummary {
     errorCount: context.recentErrors.length,
     logCount: context.recentConsoleLogs.length,
     failedRequestCount: context.failedNetworkRequests.length,
-    screenshotAttached: Boolean(context.screenshotBase64),
+    screenshotAttached: screenshotAttached || Boolean(context.screenshotBase64),
   };
 }
 

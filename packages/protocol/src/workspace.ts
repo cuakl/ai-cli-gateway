@@ -4,7 +4,7 @@ import { FrontendContextPayloadSchema } from './context.js';
 import { GitDiffSummarySchema } from './diff.js';
 import { UnifiedStreamEventSchema } from './events.js';
 import {
-  ImageAttachmentSchema,
+  IncomingImageAttachmentSchema,
   RunIdSchema,
   RunSchema,
   ThreadEventSchema,
@@ -117,7 +117,7 @@ export const WorkspaceClientMessageSchema = z.discriminatedUnion('type', [
       recentConsoleLogs: [],
       failedNetworkRequests: [],
     }),
-    attachments: z.array(ImageAttachmentSchema).optional().default([]),
+    attachments: z.array(IncomingImageAttachmentSchema).optional().default([]),
   }),
   withType('run.cancel', {
     runId: RunIdSchema,

@@ -3,7 +3,8 @@ import { toPng } from 'html-to-image';
 import { options } from 'preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { uninstallContextCollectors } from '../src/context/index.js';
-import { HIGHLIGHT_ID } from '../src/inspector/picker.js';
+import { HIGHLIGHT_ID, HIGHLIGHT_LABEL_ID, MARGIN_BOX_ID, PADDING_BOX_ID } from '../src/inspector/picker.js';
+import { BADGE_LAYER_ID } from '../src/inspector/badges.js';
 import { initDevtools } from '../src/index.js';
 import { createFakeWorkspace } from './fake-workspace.js';
 
@@ -20,6 +21,10 @@ describe('initDevtools', () => {
     uninstallContextCollectors();
     document.querySelector('ai-devtools')?.remove();
     document.getElementById(HIGHLIGHT_ID)?.remove();
+    document.getElementById(HIGHLIGHT_LABEL_ID)?.remove();
+    document.getElementById(MARGIN_BOX_ID)?.remove();
+    document.getElementById(PADDING_BOX_ID)?.remove();
+    document.getElementById(BADGE_LAYER_ID)?.remove();
     document.documentElement.style.cursor = '';
     delete (globalThis as { __AI_DEVTOOLS__?: unknown }).__AI_DEVTOOLS__;
     vi.restoreAllMocks();
@@ -88,12 +93,17 @@ describe('initDevtools', () => {
 
     button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 12, clientY: 22 }));
     const highlight = document.getElementById(HIGHLIGHT_ID);
-    expect(highlight?.textContent).toContain('button#hero.btn (320x48)');
+    const label = document.getElementById(HIGHLIGHT_LABEL_ID);
+    expect(label?.textContent).toContain('HeroButton · Hero.tsx:42');
+    expect(label?.textContent).toContain('button 320×48');
     expect(highlight?.style.pointerEvents).toBe('none');
 
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 22 }));
     expect(hostClicked).toBe(false);
     expect(shadow?.textContent).toContain('HeroButton · Hero.tsx:42');
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-chip="screenshot"]')).toBeTruthy(), {
+      timeout: 3_000,
+    });
 
     const suggestion = [...(shadow?.querySelectorAll('[data-action="suggestion"]') ?? [])].find((node) =>
       node.textContent?.includes('hover'),
@@ -110,11 +120,37 @@ describe('initDevtools', () => {
     const start = workspace.sent.find((message) => message.type === 'run.start');
     expect(start?.type === 'run.start' ? start.prompt : '').toBe('Make it emerald');
     expect(start?.type === 'run.start' ? start.context.selectedElement?.tagName : '').toBe('BUTTON');
-    expect(start?.type === 'run.start' ? start.context.screenshotBase64 : '').toContain('base64');
-    expect(start?.type === 'run.start' ? start.attachments : null).toEqual([]);
+    expect(start?.type === 'run.start' ? start.attachments : null).toEqual([
+      { kind: 'image', mime: 'image/png', dataUrl: 'data:image/png;base64,overlay' },
+    ]);
+    expect(start?.type === 'run.start' ? start.context.screenshotBase64 : undefined).toBeUndefined();
     expect(start?.type === 'run.start' ? start.mode : '').toBe('agent');
     expect(start?.type === 'run.start' ? start.prompt : '').not.toContain('<frontend_context>');
     expect(toPng).toHaveBeenCalled();
+    button.remove();
+  });
+
+  it('sends editor.open on option-click while inspecting', async () => {
+    const workspace = createFakeWorkspace();
+    const host = initDevtools({ workspace });
+    const shadow = host?.shadowRoot;
+    (shadow?.querySelector('[data-action="inspect"]') as HTMLButtonElement).click();
+    const button = document.createElement('button');
+    button.setAttribute('data-loc', 'src/components/Hero.tsx:11:4');
+    document.body.appendChild(button);
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(button);
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 100, 40));
+    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 12, clientY: 22 }));
+    button.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 22, altKey: true }),
+    );
+    await vi.waitFor(() => expect(workspace.sent.some((message) => message.type === 'editor.open')).toBe(true));
+    expect(workspace.sent.find((message) => message.type === 'editor.open')).toMatchObject({
+      type: 'editor.open',
+      file: 'src/components/Hero.tsx',
+      line: 11,
+      column: 4,
+    });
     button.remove();
   });
 

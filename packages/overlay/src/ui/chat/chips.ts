@@ -8,34 +8,50 @@ import { countLabel, type ContextChip, type ContextChipKind } from './model.js';
 const PREVIEW_LIMIT = 280;
 
 export interface DeriveChipsInput {
-  selected: SelectedElement | null;
+  selected?: SelectedElement | null;
+  selections?: readonly SelectedElement[];
   screenshotUrl: string | null;
+  screenshotError?: string | null;
   errors: readonly FrontendError[];
   failedRequests: readonly FailedNetworkRequest[];
   autoAttach: AutoAttachPrefs;
   excluded: ReadonlySet<ContextChipKind>;
   viteError?: string | null;
   testFailure?: string | null;
+  breadcrumbs?: readonly (readonly string[])[];
   now?: number;
 }
 
 export function deriveContextChips(input: DeriveChipsInput): ContextChip[] {
   const now = input.now ?? Date.now();
   const chips: ContextChip[] = [];
-  if (input.selected && !input.excluded.has('selection')) {
-    chips.push({
-      id: 'selection',
-      kind: 'selection',
-      label: selectionChipLabel(input.selected),
-      preview: previewText(input.selected.outerHTML || selectionChipLabel(input.selected)),
+  const selections =
+    input.selections && input.selections.length > 0
+      ? input.selections
+      : input.selected
+        ? [input.selected]
+        : [];
+  if (!input.excluded.has('selection')) {
+    selections.forEach((selected, index) => {
+      chips.push(
+        selectionChip(selected, index, selections.length > 1, input.breadcrumbs?.[index]),
+      );
     });
   }
-  if (input.autoAttach.screenshot && input.screenshotUrl && !input.excluded.has('screenshot')) {
+  if (input.screenshotError && !input.excluded.has('screenshot')) {
+    chips.push({
+      id: 'screenshot',
+      kind: 'screenshot',
+      label: 'Screenshot failed',
+      preview: input.screenshotError,
+      warning: true,
+    });
+  } else if (input.autoAttach.screenshot && input.screenshotUrl && !input.excluded.has('screenshot')) {
     chips.push({
       id: 'screenshot',
       kind: 'screenshot',
       label: 'Screenshot',
-      preview: 'Attached screenshot of the selected element',
+      preview: 'Attached screenshot',
       thumbnail: input.screenshotUrl,
     });
   }
@@ -79,6 +95,26 @@ export function deriveContextChips(input: DeriveChipsInput): ContextChip[] {
   return chips;
 }
 
+export function selectionChip(
+  selected: SelectedElement,
+  index: number,
+  numbered: boolean,
+  breadcrumb?: readonly string[],
+): ContextChip {
+  const loc = selected.sourceLocation;
+  return {
+    id: `selection:${index}`,
+    kind: 'selection',
+    label: selectionChipLabel(selected),
+    preview: previewText(selected.outerHTML || selectionChipLabel(selected)),
+    ...(numbered ? { badge: index + 1 } : {}),
+    breadcrumb: breadcrumb && breadcrumb.length > 0 ? [...breadcrumb] : breadcrumbFromSelected(selected),
+    ...(loc?.fileName
+      ? { file: loc.fileName, line: loc.lineNumber, column: loc.columnNumber }
+      : {}),
+  };
+}
+
 export function composerSuggestions(input: {
   selected: SelectedElement | null;
   consoleErrorCount: number;
@@ -110,8 +146,15 @@ export function chipFromConsoleEntry(entry: ConsoleEntry): ContextChip {
   };
 }
 
+function breadcrumbFromSelected(selected: SelectedElement): string[] {
+  const name = selected.sourceLocation?.componentName;
+  const tag = selected.tagName.toLowerCase();
+  return name && name !== tag ? [name, tag] : [tag];
+}
+
 function previewText(value: string): string {
   const trimmed = value.replace(/\s+/g, ' ').trim();
   if (trimmed.length <= PREVIEW_LIMIT) return trimmed;
   return `${trimmed.slice(0, PREVIEW_LIMIT)}…`;
 }
+

@@ -298,3 +298,40 @@ export function HistoryIcon(props: IconProps): JSX.Element {
     </Icon>
   );
 }
+
+export function TypeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <polyline points="4 7 4 4 20 4 20 7" />
+      <line x1="9" x2="15" y1="20" y2="20" />
+      <line x1="12" x2="12" y1="4" y2="20" />
+    </Icon>
+  );
+}
+
+export function MoveUpRightIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M13 5h6v6" />
+      <path d="m5 19 14-14" />
+    </Icon>
+  );
+}
+
+export function CameraIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+      <circle cx="12" cy="13" r="3" />
+    </Icon>
+  );
+}
+
+export function CodeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <polyline points="16 18 22 12 16 6" />
+      <polyline points="8 6 2 12 8 18" />
+    </Icon>
+  );
+}

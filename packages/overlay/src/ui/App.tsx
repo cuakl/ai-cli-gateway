@@ -23,9 +23,19 @@ import {
   subscribeContext,
 } from '../context/index.js';
 import { getRecentFailedNetworkRequests } from '../context/network.js';
-import { captureElement } from '../context/screenshot.js';
+import {
+  CaptureError,
+  captureElementOrThrow,
+  captureRegion,
+  captureViewport,
+  downscaleDataUrl,
+  type ScreenshotMode,
+} from '../context/screenshot.js';
+import { SelectionBadges } from '../inspector/badges.js';
 import { locateElement } from '../inspector/locator.js';
 import { ElementPicker } from '../inspector/picker.js';
+import { RegionPicker } from '../inspector/region.js';
+import { appendSelection, breadcrumbAncestors, breadcrumbLabels, MAX_SELECTIONS } from '../inspector/walk.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
 import { BottomDock } from './BottomDock.js';
 import { ChatDrawer } from './ChatDrawer.js';
@@ -86,6 +96,7 @@ import { SideDock } from './SideDock.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
 import { applyHostTheme, type OverlayTheme } from './theme/tokens.js';
+import { AnnotateLayer } from './AnnotateLayer.js';
 import { ToastStack, type Toast } from './ToastStack.js';
 import {
   WorkspaceClient,
@@ -145,6 +156,9 @@ export function App({ config }: AppProps) {
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
   const [connectionState, setConnectionState] = useState<WorkspaceConnectionState>('closed');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
+  const [selections, setSelections] = useState<SelectedElement[]>([]);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  const [annotating, setAnnotating] = useState<string | null>(null);
   const [provider, setProvider] = useState<ProviderType>(storedPrefs.provider ?? 'cursor');
   const [model, setModel] = useState<string | null>(storedPrefs.model ?? null);
   const [mode, setMode] = useState<RunMode>(storedPrefs.mode === 'ask' ? 'ask' : 'agent');
@@ -180,8 +194,13 @@ export function App({ config }: AppProps) {
   const [reviewRunId, setReviewRunId] = useState<string | null>(null);
   const [liveRunFiles, setLiveRunFiles] = useState<string[]>([]);
   const elementRef = useRef<Element | null>(null);
+  const elementRefs = useRef<Element[]>([]);
   const selectedLocRef = useRef<string | null>(storedSession.selectedLoc ?? null);
   const pickerRef = useRef<ElementPicker | null>(null);
+  const badgesRef = useRef<SelectionBadges | null>(null);
+  const regionRef = useRef<RegionPicker | null>(null);
+  const applyPickRef = useRef<(element: Element, shift: boolean) => void>(() => undefined);
+  const openEditorRef = useRef<(element: Element) => void>(() => undefined);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const stopRun = useRef<(() => void) | null>(null);
   const runCleanup = useRef<(() => void) | null>(null);
@@ -192,6 +211,7 @@ export function App({ config }: AppProps) {
   const sideOpenRef = useRef(sideOpen);
   const sideTabRef = useRef(sideTab);
   const inspectingRef = useRef(inspecting);
+  const annotatingRef = useRef(false);
   const bottomOpenRef = useRef(bottomOpen);
   const bottomTabRef = useRef(bottomTab);
   const paletteOpenRef = useRef(paletteOpen);
@@ -210,6 +230,7 @@ export function App({ config }: AppProps) {
   sideOpenRef.current = sideOpen;
   sideTabRef.current = sideTab;
   inspectingRef.current = inspecting;
+  annotatingRef.current = Boolean(annotating);
   bottomOpenRef.current = bottomOpen;
   bottomTabRef.current = bottomTab;
   paletteOpenRef.current = paletteOpen;
@@ -252,7 +273,10 @@ export function App({ config }: AppProps) {
   const chips = useMemo(() => {
     const derived = deriveContextChips({
       selected,
+      selections,
       screenshotUrl,
+      screenshotError,
+      breadcrumbs: elementRefs.current.map((node) => breadcrumbLabels(node)),
       errors: getRecentErrors(),
       failedRequests: getRecentFailedNetworkRequests(CONTEXT_MAX_AGE_MS),
       autoAttach,
@@ -261,7 +285,7 @@ export function App({ config }: AppProps) {
     });
     const pinnedKinds = new Set(pinnedChips.map((chip) => chip.kind));
     return [...derived.filter((chip) => !pinnedKinds.has(chip.kind)), ...pinnedChips];
-  }, [selected, screenshotUrl, autoAttach, excludedKinds, contextTick, pinnedChips]);
+  }, [selected, selections, screenshotUrl, screenshotError, autoAttach, excludedKinds, contextTick, pinnedChips]);
   const suggestions = useMemo(() => {
     if (chat.items.length > 0 || threadId) return [];
     return composerSuggestions({ selected, consoleErrorCount: getRecentErrors().length });
@@ -400,24 +424,27 @@ export function App({ config }: AppProps) {
 
   useLayoutEffect(() => {
     const picker = new ElementPicker({
-      onSelect(element) {
-        elementRef.current = element;
-        selectedLocRef.current = element.getAttribute('data-loc');
-        setSelected(locateElement(element));
-        setInspecting(false);
-        setSideTab('chat');
-        setSideOpen(true);
-        setChatUnread(false);
+      onSelect(element, extras) {
+        applyPickRef.current(element, extras.shift);
       },
       onCancel() {
         setInspecting(false);
         focusAction('inspect');
       },
+      onOpenEditor(element) {
+        openEditorRef.current(element);
+      },
     });
     pickerRef.current = picker;
+    const badges = new SelectionBadges();
+    badgesRef.current = badges;
     return () => {
       picker.stop();
       pickerRef.current = null;
+      badges.stop();
+      badgesRef.current = null;
+      regionRef.current?.stop();
+      regionRef.current = null;
     };
   }, []);
 
@@ -562,7 +589,10 @@ export function App({ config }: AppProps) {
       const element = document.querySelector(locSelector(loc));
       if (!(element instanceof Element)) return;
       elementRef.current = element;
-      setSelected(locateElement(element));
+      elementRefs.current = [element];
+      const located = locateElement(element);
+      setSelected(located);
+      setSelections([located]);
     } catch {
       selectedLocRef.current = null;
     }
@@ -587,26 +617,45 @@ export function App({ config }: AppProps) {
 
   useEffect(() => {
     setExcludedKinds((current) => current.filter((kind) => kind !== 'selection' && kind !== 'screenshot'));
-  }, [selected]);
+  }, [selected, selections]);
 
   useEffect(() => {
-    if (!selected || !autoAttach.screenshot) {
+    if (!autoAttach.screenshot) {
       setScreenshotUrl(null);
+      setScreenshotError(null);
       return;
     }
-    const element = elementRef.current;
-    if (!element?.isConnected) {
+    const element = elementRefs.current[elementRefs.current.length - 1] ?? elementRef.current;
+    if (!element?.isConnected || selections.length === 0) {
       setScreenshotUrl(null);
       return;
     }
     let cancelled = false;
-    void captureElement(element).then((url) => {
-      if (!cancelled) setScreenshotUrl(url ?? null);
-    });
+    void captureElementOrThrow(element)
+      .then((url) => {
+        if (cancelled) return;
+        setScreenshotError(null);
+        setScreenshotUrl(url);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setScreenshotUrl(null);
+        setScreenshotError(error instanceof CaptureError ? error.message : 'Screenshot capture failed');
+      });
     return () => {
       cancelled = true;
     };
-  }, [selected, autoAttach.screenshot]);
+  }, [selected, selections, autoAttach.screenshot]);
+
+  useEffect(() => {
+    const badges = badgesRef.current;
+    if (!badges) return;
+    if (sideOpen && sideTab === 'chat' && selections.length > 0) {
+      badges.set(elementRefs.current);
+    } else {
+      badges.set([]);
+    }
+  }, [selections, sideOpen, sideTab, contextTick]);
 
   useEffect(() => {
     if (!historyOpen) return;
@@ -740,6 +789,12 @@ export function App({ config }: AppProps) {
         event.stopImmediatePropagation();
         return;
       }
+      if (annotatingRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setAnnotating(null);
+        return;
+      }
       if (inspectingRef.current) return;
       if (bottomOpenRef.current) {
         event.preventDefault();
@@ -797,6 +852,133 @@ export function App({ config }: AppProps) {
     if (disposeTerminal) setTerminalMounted(false);
     setBottomOpen(false);
     queueMicrotask(() => focusAction(action));
+  }
+
+  function applyPick(element: Element, shift: boolean): void {
+    const located = locateElement(element);
+    if (shift) {
+      const nextEls = appendSelection(elementRefs.current, element, MAX_SELECTIONS);
+      if (nextEls.length === elementRefs.current.length) return;
+      elementRefs.current = nextEls;
+      elementRef.current = nextEls[0] ?? element;
+      selectedLocRef.current = (nextEls[0] ?? element).getAttribute('data-loc');
+      const next = nextEls.map((node, index) =>
+        node === element ? located : selections[index] ?? locateElement(node),
+      );
+      setSelections(next);
+      setSelected(next[0] ?? located);
+    } else {
+      elementRef.current = element;
+      elementRefs.current = [element];
+      selectedLocRef.current = element.getAttribute('data-loc');
+      setSelected(located);
+      setSelections([located]);
+      setInspecting(false);
+    }
+    setSideTab('chat');
+    setSideOpen(true);
+    setChatUnread(false);
+  }
+  applyPickRef.current = applyPick;
+
+  async function openElementInEditor(element: Element): Promise<void> {
+    const located = locateElement(element);
+    const loc = located.sourceLocation;
+    if (!loc?.fileName) {
+      pushToast({ text: 'No source location for that element', tone: 'error' });
+      return;
+    }
+    try {
+      await workspace.request({
+        type: 'editor.open',
+        file: loc.fileName,
+        line: loc.lineNumber,
+        column: loc.columnNumber,
+      });
+    } catch (error) {
+      pushToast({ text: error instanceof Error ? error.message : 'Could not open editor', tone: 'error' });
+    }
+  }
+  openEditorRef.current = (element) => {
+    void openElementInEditor(element);
+  };
+
+  async function openChipInEditor(chip: ContextChip): Promise<void> {
+    if (!chip.file) {
+      pushToast({ text: 'No source location for that element', tone: 'error' });
+      return;
+    }
+    try {
+      await workspace.request({
+        type: 'editor.open',
+        file: chip.file,
+        ...(chip.line !== undefined ? { line: chip.line } : {}),
+        ...(chip.column !== undefined ? { column: chip.column } : {}),
+      });
+    } catch (error) {
+      pushToast({ text: error instanceof Error ? error.message : 'Could not open editor', tone: 'error' });
+    }
+  }
+
+  function retargetChip(chip: ContextChip, index: number): void {
+    const match = /^selection:(\d+)$/.exec(chip.id);
+    const slot = match ? Number(match[1]) : 0;
+    const current = elementRefs.current[slot];
+    if (!current) return;
+    const ancestors = breadcrumbAncestors(current);
+    const target = ancestors[index] ?? current;
+    elementRefs.current = elementRefs.current.map((node, i) => (i === slot ? target : node));
+    elementRef.current = elementRefs.current[0] ?? target;
+    selectedLocRef.current = elementRef.current.getAttribute('data-loc');
+    const located = locateElement(target);
+    setSelections((currentSelections) =>
+      currentSelections.map((item, i) => (i === slot ? located : item)),
+    );
+    setSelected(elementRefs.current[0] ? locateElement(elementRefs.current[0]) : located);
+  }
+
+  async function beginScreenshot(mode: ScreenshotMode): Promise<void> {
+    try {
+      if (mode === 'region') {
+        setInspecting(false);
+        regionRef.current?.stop();
+        const picker = new RegionPicker({
+          onSelect(rect) {
+            void captureRegion(rect)
+              .then((url) => openAnnotate(url))
+              .catch((error) => failScreenshot(error));
+          },
+          onCancel() {
+            regionRef.current = null;
+          },
+        });
+        regionRef.current = picker;
+        picker.start();
+        return;
+      }
+      const url =
+        mode === 'viewport'
+          ? await captureViewport()
+          : await captureElementOrThrow(
+              elementRefs.current[elementRefs.current.length - 1] ?? elementRef.current ?? document.body,
+            );
+      await openAnnotate(url);
+    } catch (error) {
+      failScreenshot(error);
+    }
+  }
+
+  async function openAnnotate(dataUrl: string): Promise<void> {
+    setAnnotating(dataUrl);
+  }
+
+  function failScreenshot(error: unknown): void {
+    const message =
+      error instanceof CaptureError ? error.message : 'Screenshot capture failed';
+    setScreenshotUrl(null);
+    setScreenshotError(message);
+    setExcludedKinds((current) => current.filter((kind) => kind !== 'screenshot'));
+    pushToast({ text: message, tone: 'error' });
   }
 
   function openSettings(): void {
@@ -1134,14 +1316,17 @@ export function App({ config }: AppProps) {
           : selected ?? undefined
         : undefined;
       const context = await gatherContext(selectedElement, live, {
-        screenshot: includeScreenshot && Boolean(selectedElement || screenshotChip),
-        ...(screenshotChip?.thumbnail ? { screenshotDataUrl: screenshotChip.thumbnail } : {}),
+        screenshot: false,
         consoleErrors: autoAttach.consoleErrors && !excluded.has('console'),
         failedRequests: autoAttach.failedRequests && !excluded.has('network'),
         pinnedErrors,
         pinnedRequests,
       });
       if (settled) return;
+      const attachments =
+        includeScreenshot && screenshotChip?.thumbnail && !screenshotChip.warning
+          ? [{ kind: 'image' as const, mime: 'image/png', dataUrl: screenshotChip.thumbnail }]
+          : [];
       const accepted = await workspace.request({
         type: 'run.start',
         requestId,
@@ -1151,7 +1336,7 @@ export function App({ config }: AppProps) {
         mode: mode === 'ask' ? 'ask' : 'agent',
         prompt: text,
         context,
-        attachments: [],
+        attachments,
       });
       runId = accepted.runId;
       dispatchChat({ type: 'retarget', from: localRunId, to: accepted.runId });
@@ -1176,8 +1361,27 @@ export function App({ config }: AppProps) {
     <div className="dock" ref={shellRef}>
       {inspecting ? (
         <div className="inspect-banner" role="status">
-          Click an element to attach it. Press Esc to cancel.
+          Click to attach · Shift+click adds · ↑/↓ walks · ⌥click opens editor · Esc cancels
         </div>
+      ) : null}
+      {annotating ? (
+        <AnnotateLayer
+          dataUrl={annotating}
+          onCancel={() => setAnnotating(null)}
+          onAttach={(dataUrl) => {
+            void downscaleDataUrl(dataUrl)
+              .then((url) => {
+                setScreenshotError(null);
+                setScreenshotUrl(url);
+                setExcludedKinds((current) => current.filter((kind) => kind !== 'screenshot'));
+                setAnnotating(null);
+              })
+              .catch((error) => {
+                setAnnotating(null);
+                failScreenshot(error);
+              });
+          }}
+        />
       ) : null}
       <ToastStack
         toasts={toasts}
@@ -1255,15 +1459,34 @@ export function App({ config }: AppProps) {
                 if (chip.id.startsWith('fix:')) {
                   setPinnedErrors([]);
                   setPinnedRequests([]);
-                } else {
+                } else if (chip.kind !== 'selection') {
                   setExcludedKinds((current) => (current.includes(chip.kind) ? current : [...current, chip.kind]));
                 }
                 if (chip.kind === 'selection') {
-                  elementRef.current = null;
-                  selectedLocRef.current = null;
-                  setSelected(null);
+                  const match = /^selection:(\d+)$/.exec(chip.id);
+                  const slot = match ? Number(match[1]) : 0;
+                  const nextEls = elementRefs.current.filter((_, index) => index !== slot);
+                  const next = selections.filter((_, index) => index !== slot);
+                  elementRefs.current = nextEls;
+                  elementRef.current = nextEls[0] ?? null;
+                  selectedLocRef.current = nextEls[0]?.getAttribute('data-loc') ?? null;
+                  setSelections(next);
+                  setSelected(next[0] ?? null);
                 }
-                if (chip.kind === 'screenshot') setScreenshotUrl(null);
+                if (chip.kind === 'screenshot') {
+                  setScreenshotUrl(null);
+                  setScreenshotError(null);
+                }
+              }}
+              onOpenEditor={(chip) => {
+                void openChipInEditor(chip);
+              }}
+              onBreadcrumb={retargetChip}
+              onScreenshot={(mode) => {
+                void beginScreenshot(mode);
+              }}
+              onAnnotateScreenshot={(chip) => {
+                if (chip.thumbnail) void openAnnotate(chip.thumbnail);
               }}
               onSuggest={insertSuggestion}
               onSearchFiles={searchFiles}

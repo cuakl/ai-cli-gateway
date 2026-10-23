@@ -27,6 +27,8 @@ export interface EditingRuntime {
     listCapabilities: () => Promise<ProviderCapabilities[]>;
   };
   prompts: string[];
+  /** Full adapter options, including argv-equivalent prompt with attachment paths. */
+  received: PromptOptions[];
 }
 
 /**
@@ -35,6 +37,7 @@ export interface EditingRuntime {
  */
 export function createEditingRuntime(root: string): EditingRuntime {
   const prompts: string[] = [];
+  const received: PromptOptions[] = [];
   const allowed = path.resolve(root);
 
   const adapter = {
@@ -54,6 +57,7 @@ export function createEditingRuntime(root: string): EditingRuntime {
     ): Promise<{ exitCode: number; summary: string }> {
       const sessionId = options.sessionId ?? 'e2e';
       prompts.push(options.prompt);
+      received.push(options);
       if (options.mode === 'ask' || options.mode === 'plan') {
         onEvent(createStreamEvent(sessionId, 'chunk', { text: SCRIPTED_COMMIT_MESSAGE }));
         onEvent(createStreamEvent(sessionId, 'done', {}));
@@ -84,6 +88,7 @@ export function createEditingRuntime(root: string): EditingRuntime {
 
   return {
     prompts,
+    received,
     runtime: {
       getAdapter(provider: ProviderType) {
         if (provider !== 'antigravity') throw new Error(`Provider ${provider} is not available`);

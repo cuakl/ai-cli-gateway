@@ -25,6 +25,14 @@ export interface ContextChip {
   preview?: string;
   /** Data URL for a screenshot thumbnail. */
   thumbnail?: string;
+  /** 1-based badge shown on the page and the chip. */
+  badge?: number;
+  /** Ancestor labels for the breadcrumb popover. */
+  breadcrumb?: string[];
+  file?: string;
+  line?: number;
+  column?: number;
+  warning?: boolean;
 }
 
 export interface NoticeAction {

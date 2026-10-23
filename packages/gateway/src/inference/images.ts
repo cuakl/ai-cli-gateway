@@ -73,6 +73,41 @@ export async function writeInferImages(options: {
   return { attachments, promptPaths };
 }
 
+/**
+ * Write overlay screenshots to `$AIDEV_HOME/attachments/<runId>/` and return
+ * those paths for the CLI prompt.
+ */
+export async function writeRunAttachments(options: {
+  home: string;
+  runId: string;
+  images: ReadonlyArray<{ dataUrl: string }>;
+}): Promise<WrittenImages> {
+  if (options.images.length === 0) return { attachments: [], promptPaths: [] };
+  if (options.images.length > MAX_INFER_IMAGES) {
+    throw new HttpError(
+      400,
+      'validation_error',
+      `attachments: at most ${MAX_INFER_IMAGES} images are allowed`,
+    );
+  }
+  const dir = path.join(options.home, 'attachments', options.runId);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const attachments: ImageAttachment[] = [];
+  const promptPaths: string[] = [];
+  for (let index = 0; index < options.images.length; index += 1) {
+    const image = options.images[index];
+    if (!image) continue;
+    const decoded = decodeDataUrl(image.dataUrl, index);
+    const ext = MIME_EXT[decoded.mime] ?? 'png';
+    const name = `${index}.${ext}`;
+    const recorded = path.join(dir, name);
+    await writeFile(recorded, decoded.bytes, { mode: 0o600 });
+    attachments.push({ kind: 'image', path: recorded, mime: decoded.mime });
+    promptPaths.push(recorded);
+  }
+  return { attachments, promptPaths };
+}
+
 async function decodeImage(
   image: InferImage,
   index: number,

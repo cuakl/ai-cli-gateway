@@ -5,7 +5,8 @@
  * The gateway is a scripted provider, so the loop does not call a real CLI or edit this repo.
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { cp, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
     if (!prompt.includes(PROMPT)) throw new Error(`Gateway received an unexpected prompt:\n${prompt}`);
     if (!prompt.includes('hero-btn')) throw new Error('The prompt was missing the selected hero button');
     if (!prompt.includes('Hero.tsx')) throw new Error('The prompt was missing the hero source location');
+    await assertRunAttachment(home, editing.received.find((item) => item.prompt.includes(PROMPT))?.prompt ?? prompt);
     const log = await exec('git', ['log', '-1', '--format=%s'], { cwd: dir });
     if (log.stdout.trim() !== 'style(hero): purple rounded button') {
       throw new Error(`Unexpected commit subject: ${log.stdout.trim()}`);
@@ -104,6 +106,7 @@ async function exercise(page: Page, url: string): Promise<void> {
   await page.getByRole('img', { name: 'Gateway connected' }).waitFor();
   await fillNote(page);
   await exerciseThrowAndFix(page);
+  await exerciseInspector(page);
 
   await page.getByRole('button', { name: 'Inspect', exact: true }).click();
   await page.locator('#hero-btn').click();
@@ -171,6 +174,86 @@ async function exercise(page: Page, url: string): Promise<void> {
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
   await page.getByText('No changes yet').waitFor();
   await exerciseTerminal(page);
+}
+
+async function exerciseInspector(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click();
+  const price = page.locator('strong', { hasText: '$86' });
+  await price.hover();
+  await page.locator('#ai-devtools-highlight-label').waitFor();
+  const hoverText = await page.locator('#ai-devtools-highlight-label').textContent();
+  if (!hoverText || !/CardGrid\.tsx|ProductCard/.test(hoverText)) {
+    throw new Error(`Inspector hover label was missing CardGrid/ProductCard:\n${hoverText}`);
+  }
+  await shot(page, 'inspector-hover');
+
+  const before = await page.locator('#ai-devtools-highlight').boundingBox();
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(80);
+  const after = await page.locator('#ai-devtools-highlight').boundingBox();
+  if (!before || !after || after.width * after.height <= before.width * before.height) {
+    throw new Error(
+      `ArrowUp did not walk to a larger ancestor (before ${JSON.stringify(before)} after ${JSON.stringify(after)})`,
+    );
+  }
+  await page.keyboard.press('ArrowDown');
+  await price.click();
+  await page.getByText(/CardGrid\.tsx/).first().waitFor();
+
+  await page.getByRole('button', { name: 'Inspect', exact: true }).click();
+  await page.locator('strong', { hasText: '$42' }).click({ modifiers: ['Shift'] });
+  await page.waitForFunction(() => {
+    const root = document.querySelector('ai-devtools')?.shadowRoot;
+    return (root?.querySelectorAll('[data-chip="selection"]').length ?? 0) >= 2;
+  });
+
+  await page.keyboard.press('Escape');
+  const screenshotChip = page.locator('[data-action="annotate-screenshot"]');
+  if ((await screenshotChip.count()) > 0) {
+    await screenshotChip.first().click();
+  } else {
+    await page.locator('[data-action="screenshot-element"]').click();
+  }
+  try {
+    await page.locator('[data-action="annotate-layer"]').waitFor({ timeout: 15_000 });
+    await page.locator('[data-action="annotate-arrow"]').click();
+    const canvas = page.locator('.annotate-canvas');
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + 30, box.y + 30);
+      await page.mouse.down();
+      await page.mouse.move(box.x + Math.min(box.width - 20, 180), box.y + Math.min(box.height - 20, 120));
+      await page.mouse.up();
+    }
+    await shot(page, 'annotate');
+    await page.locator('[data-action="annotate-attach"]').click();
+    await page.locator('[data-action="annotate-layer"]').waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => undefined);
+  } catch (error) {
+    await shot(page, 'annotate');
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Annotation layer did not open after Element screenshot:\n${message}`);
+  }
+}
+
+async function assertRunAttachment(home: string, prompt: string): Promise<void> {
+  const root = path.join(home, 'attachments');
+  if (!existsSync(root)) throw new Error(`No attachments directory under ${root}`);
+  const runs = await readdir(root);
+  if (runs.length === 0) throw new Error(`No run folders under ${root}`);
+  let filePath = '';
+  for (const runId of runs) {
+    const dir = path.join(root, runId);
+    const files = await readdir(dir).catch(() => []);
+    const image = files.find((name) => /\.(png|jpe?g|webp|gif)$/i.test(name));
+    if (image) {
+      filePath = path.join(dir, image);
+      break;
+    }
+  }
+  if (!filePath) throw new Error(`No attachment image under ${root}/${runs.join(',')}`);
+  if (!prompt.includes(filePath) && !prompt.includes('attachments')) {
+    throw new Error(`CLI prompt was missing the attachment path ${filePath}:\n${prompt}`);
+  }
 }
 
 async function exerciseThrowAndFix(page: Page): Promise<void> {

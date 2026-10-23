@@ -41,6 +41,15 @@ export const ImageAttachmentSchema = z.object({
 
 export type ImageAttachment = z.infer<typeof ImageAttachmentSchema>;
 
+/** Bytes from the overlay. The gateway writes these to `attachments/<runId>/`. */
+export const IncomingImageAttachmentSchema = z.object({
+  kind: z.literal('image'),
+  mime: z.string().min(1),
+  dataUrl: z.string().min(1),
+});
+
+export type IncomingImageAttachment = z.infer<typeof IncomingImageAttachmentSchema>;
+
 export const RunStatusSchema = z.enum([
   'queued',
   'running',
