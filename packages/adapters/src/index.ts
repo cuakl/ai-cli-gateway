@@ -5,7 +5,6 @@ export {
   CodexAdapter,
   CursorAdapter,
   DEFAULT_CLAUDE_TOOLS,
-  cleanupCursorEphemeral,
   createAdapter,
   getAvailableAdapters,
 } from './adapters/index.js';

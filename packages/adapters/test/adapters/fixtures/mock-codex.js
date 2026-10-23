@@ -29,6 +29,7 @@ async function main() {
   if (!prompt || prompt.startsWith('-')) fail('expected prompt');
 
   const events = [
+    { type: 'thread.started', thread_id: 'thr_codex', model: 'gpt-5' },
     { type: 'item.completed', item: { type: 'agent_message', text: 'Renamed the header' } },
     { type: 'item.started', item: { type: 'command_execution', command: 'ls src' } },
     { type: 'item.completed', item: { type: 'command_execution', aggregated_output: 'App.tsx' } },

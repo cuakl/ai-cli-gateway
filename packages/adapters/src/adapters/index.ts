@@ -52,4 +52,4 @@ export async function getAvailableAdapters(options?: {
 export { AntigravityAdapter } from './antigravity.js';
 export { ClaudeAdapter, DEFAULT_CLAUDE_TOOLS } from './claude.js';
 export { CodexAdapter } from './codex.js';
-export { CursorAdapter, cleanupCursorEphemeral } from './cursor.js';
+export { CursorAdapter } from './cursor.js';

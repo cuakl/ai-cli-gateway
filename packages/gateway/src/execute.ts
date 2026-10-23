@@ -159,6 +159,9 @@ function toPromptOptions(request: PromptRequest, sessionId: string): PromptOptio
     ...(request.files !== undefined ? { files: request.files } : {}),
     ...(request.ephemeral !== undefined ? { ephemeral: request.ephemeral } : {}),
     ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+    ...(request.providerSessionId !== undefined ? { providerSessionId: request.providerSessionId } : {}),
+    ...(request.model !== undefined ? { model: request.model } : {}),
+    ...(request.mode !== undefined ? { mode: request.mode } : {}),
   };
 }
 

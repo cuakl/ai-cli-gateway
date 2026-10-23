@@ -8,7 +8,12 @@
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const BOOLEAN_FLAGS = new Set(['--verbose', '--include-partial-messages', '--bare']);
+const BOOLEAN_FLAGS = new Set([
+  '--verbose',
+  '--include-partial-messages',
+  '--bare',
+  '--no-session-persistence',
+]);
 const VALUE_FLAGS = new Set([
   '-p',
   '--print',
@@ -16,6 +21,10 @@ const VALUE_FLAGS = new Set([
   '--permission-mode',
   '--allowedTools',
   '--allowed-tools',
+  '--model',
+  '--append-system-prompt',
+  '--resume',
+  '-r',
 ]);
 
 function fail(message) {
@@ -61,9 +70,14 @@ async function main() {
   if (values['--output-format'] !== 'stream-json') fail('expected stream-json');
   if (!values['--verbose']) fail('expected --verbose');
   if (!values['--include-partial-messages']) fail('expected --include-partial-messages');
-  if (values['--permission-mode'] !== 'acceptEdits') fail('expected permission mode acceptEdits');
-  const tools = values['--allowedTools'] || values['--allowed-tools'] || '';
-  if (!tools.split(',').includes('Read') || !tools.split(',').includes('Edit')) {
+  const permission = values['--permission-mode'];
+  if (permission !== 'acceptEdits' && permission !== 'plan') fail('expected permission mode acceptEdits or plan');
+  const tools = (values['--allowedTools'] || values['--allowed-tools'] || '').split(',');
+  if (permission === 'plan') {
+    for (const name of ['Read', 'Glob', 'Grep']) {
+      if (!tools.includes(name)) fail(`expected ${name} in allowed tools`);
+    }
+  } else if (!tools.includes('Read') || !tools.includes('Edit')) {
     fail('expected Read and Edit in allowed tools');
   }
 
@@ -127,6 +141,7 @@ async function main() {
       result: 'Updated styles',
       duration_ms: 80,
       total_cost_usd: 0.02,
+      session_id: 'cli-sess',
     },
   ];
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RunModeSchema } from './capabilities.js';
 
 /** Default child-process watchdog: 5 minutes. */
 export const DEFAULT_PROCESS_TIMEOUT_MS = 300_000;
@@ -17,6 +18,12 @@ export const PromptOptionsSchema = z.object({
   files: z.array(z.string()).optional(),
   ephemeral: z.boolean().optional(),
   timeoutMs: z.number().int().positive().optional(),
+  /** CLI chat id captured from `session_info`. */
+  providerSessionId: z.string().min(1).optional(),
+  /** Model id the CLI should use. Omitted lets the CLI choose. */
+  model: z.string().min(1).optional(),
+  /** Omitted means `agent`. `ask` and `plan` are read-only. */
+  mode: RunModeSchema.optional(),
 });
 
 export type PromptOptions = z.infer<typeof PromptOptionsSchema>;

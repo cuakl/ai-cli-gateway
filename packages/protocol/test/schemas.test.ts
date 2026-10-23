@@ -7,6 +7,7 @@ import {
   ProjectRegisterRequestSchema,
   ProjectRegisterResponseSchema,
   ProjectSchema,
+  PromptOptionsSchema,
   PromptRequestSchema,
   ProviderCapabilitiesSchema,
   ProviderSchema,
@@ -751,6 +752,31 @@ describe('protocol schemas', () => {
         supportsSystemPrompt: false,
       }).binaryPath,
     ).toBeNull();
+  });
+
+  it('accepts mode, model, and providerSessionId on prompt options', () => {
+    expect(
+      PromptOptionsSchema.parse({
+        prompt: 'Hi',
+        cwd: '/work/app',
+        mode: 'plan',
+        model: 'sonnet',
+        providerSessionId: 'chat_1',
+        systemPrompt: 'Be brief',
+        ephemeral: true,
+      }),
+    ).toMatchObject({
+      mode: 'plan',
+      model: 'sonnet',
+      providerSessionId: 'chat_1',
+      systemPrompt: 'Be brief',
+      ephemeral: true,
+    });
+    expect(PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app' }).mode).toBeUndefined();
+    expect(() => PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app', mode: 'edit' })).toThrow();
+    expect(() =>
+      PromptOptionsSchema.parse({ prompt: 'Hi', cwd: '/work/app', providerSessionId: '' }),
+    ).toThrow();
   });
 
   it('builds a session_info event through createStreamEvent', () => {

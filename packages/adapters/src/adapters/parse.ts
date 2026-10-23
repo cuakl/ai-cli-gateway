@@ -96,6 +96,20 @@ function readToolCallId(record: Record<string, unknown>, nested: boolean): strin
   return undefined;
 }
 
+/** One `session_info` from a CLI init line. Model is included only when the CLI sent one. */
+export function sessionInfoFromRecord(
+  record: Record<string, unknown>,
+  sessionId: string,
+): UnifiedStreamEvent | undefined {
+  const providerSessionId = stringField(record, 'session_id', 'thread_id', 'conversation_id', 'chat_id');
+  if (!providerSessionId) return undefined;
+  const model = stringField(record, 'model');
+  return createStreamEvent(sessionId, 'session_info', {
+    providerSessionId,
+    ...(model ? { model } : {}),
+  });
+}
+
 export function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];

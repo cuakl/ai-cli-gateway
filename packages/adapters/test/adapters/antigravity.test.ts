@@ -26,7 +26,8 @@ describe('AntigravityAdapter', () => {
       adapter.buildArgs({
         prompt: 'tint the button',
         cwd: '/repo',
-        sessionId: 'sess-9',
+        sessionId: 'gateway-sess',
+        providerSessionId: 'conv-9',
         files: ['src/Hero.tsx', 'src/App.tsx'],
       }),
     ).toEqual([
@@ -37,12 +38,23 @@ describe('AntigravityAdapter', () => {
       '--workspace',
       '/repo',
       '--conversation',
-      'sess-9',
+      'conv-9',
       '--file',
       'src/Hero.tsx',
       '--file',
       'src/App.tsx',
     ]);
+    expect(
+      adapter.buildArgs({
+        prompt: 'tint the button',
+        cwd: '/repo',
+        mode: 'ask',
+        model: 'gemini',
+        systemPrompt: 'Be brief',
+        ephemeral: true,
+        sessionId: 'gateway-sess',
+      }),
+    ).toEqual(['--print', 'tint the button', '--output-format', 'stream-json', '--workspace', '/repo']);
   });
 
   it('maps NDJSON events and ignores non-JSON stdout', () => {
@@ -64,6 +76,10 @@ describe('AntigravityAdapter', () => {
     expect(done).toMatchObject([
       { type: 'done', payload: { durationMs: 42, costUsd: 0.01, text: 'button updated' } },
     ]);
+
+    expect(
+      parseAntigravityLine(JSON.stringify({ type: 'init', session_id: 'agy-chat', model: 'gemini' }), 'sess-1'),
+    ).toMatchObject([{ type: 'session_info', payload: { providerSessionId: 'agy-chat', model: 'gemini' } }]);
   });
 
   it('streams mock agy NDJSON in order and drops a non-JSON line', async () => {
@@ -80,7 +96,7 @@ describe('AntigravityAdapter', () => {
       expect(events.map((event) => event.type)).toEqual([
         'init',
         'chunk',
-        'init',
+        'session_info',
         'chunk',
         'chunk',
         'tool_call',
@@ -88,6 +104,10 @@ describe('AntigravityAdapter', () => {
         'file_edit',
         'done',
       ]);
+      expect(events.filter((event) => event.type === 'session_info')).toHaveLength(1);
+      expect(events.find((event) => event.type === 'session_info')?.payload).toEqual({
+        providerSessionId: 'agy-chat',
+      });
       expect(events.every((event) => event.sessionId === 'sess-agy')).toBe(true);
       const chunks = events.filter((event) => event.type === 'chunk');
       expect(chunks.map((event) => event.payload.text)).toEqual([prompt, 'Hello ', 'world']);
@@ -95,7 +115,7 @@ describe('AntigravityAdapter', () => {
       expect(result.summary).toBe(chunks.map((event) => event.payload.text).join(''));
       expect(result.summary).not.toContain('status: writing styles');
       expect(events[0]?.payload.text).toBe('antigravity session started');
-      expect(events[2]?.payload.text).toBe('agy session ready');
+      expect(events[2]?.payload).toEqual({ providerSessionId: 'agy-chat' });
       const toolCall = events.find((event) => event.type === 'tool_call');
       const toolResult = events.find((event) => event.type === 'tool_result');
       expect(toolCall?.payload).toMatchObject({

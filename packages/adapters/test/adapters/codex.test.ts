@@ -19,13 +19,27 @@ describe('CodexAdapter', () => {
       'workspace-write',
       'rename the header',
     ]);
-    expect(adapter.buildArgs({ prompt: 'rename the header', cwd: '/repo', sessionId: 'sess-9' })).toEqual([
+    expect(
+      adapter.buildArgs({ prompt: 'rename the header', cwd: '/repo', providerSessionId: 'thr_1' }),
+    ).toEqual(['exec', 'resume', 'thr_1', '--jsonl', '--sandbox', 'workspace-write', 'rename the header']);
+    expect(
+      adapter.buildArgs({
+        prompt: 'rename the header',
+        cwd: '/repo',
+        mode: 'ask',
+        model: 'gpt-5',
+        systemPrompt: 'Be brief',
+        ephemeral: true,
+        sessionId: 'gateway-sess',
+      }),
+    ).toEqual(['exec', '--jsonl', '--sandbox', 'read-only', 'rename the header']);
+    expect(adapter.buildArgs({ prompt: 'rename the header', cwd: '/repo', mode: 'plan', providerSessionId: 'thr_1' })).toEqual([
       'exec',
       'resume',
-      'sess-9',
+      'thr_1',
       '--jsonl',
       '--sandbox',
-      'workspace-write',
+      'read-only',
       'rename the header',
     ]);
   });
@@ -47,6 +61,10 @@ describe('CodexAdapter', () => {
       'sess',
     );
     expect(item).toMatchObject([{ type: 'chunk', payload: { text: 'Renamed the header' } }]);
+
+    expect(
+      parseCodexLine(JSON.stringify({ type: 'thread.started', thread_id: 'thr_codex', model: 'gpt-5' }), 'sess'),
+    ).toMatchObject([{ type: 'session_info', payload: { providerSessionId: 'thr_codex', model: 'gpt-5' } }]);
   });
 
   it('streams mock codex JSONL in order', async () => {
@@ -66,12 +84,18 @@ describe('CodexAdapter', () => {
       expect(result.summary).toBe('Renamed the header');
       expect(events.map((event) => event.type)).toEqual([
         'init',
+        'session_info',
         'chunk',
         'tool_call',
         'tool_result',
         'file_edit',
         'done',
       ]);
+      expect(events.filter((event) => event.type === 'session_info')).toHaveLength(1);
+      expect(events.find((event) => event.type === 'session_info')?.payload).toEqual({
+        providerSessionId: 'thr_codex',
+        model: 'gpt-5',
+      });
       expect(events.every((event) => event.sessionId === 'sess-codex')).toBe(true);
       expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0]);
       const toolCall = events.find((event) => event.type === 'tool_call');

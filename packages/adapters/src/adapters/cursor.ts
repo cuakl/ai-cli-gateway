@@ -1,5 +1,3 @@
-import { lstat, rm, unlink } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
 import { createStreamEvent, type PromptOptions, type UnifiedStreamEvent } from '@aidev/protocol';
 import type { ProcessManager } from '../session/manager.js';
 import { BinaryResolver, describeAuthFailure } from '../utils/binary.js';
@@ -22,13 +20,11 @@ import {
   isToolCallType,
   isToolResultType,
   parseJsonRecord,
+  sessionInfoFromRecord,
   stringField,
   textChunk,
   toolResultEvent,
 } from './parse.js';
-
-/** Session directory names we are willing to delete. Rejects `.`, `..`, and path separators. */
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 const EDIT_TOOL_CASES = new Set([
   'edittoolcall',
@@ -40,15 +36,17 @@ const EDIT_TOOL_CASES = new Set([
 /**
  * Cursor agent CLI (`agent` / `cursor-agent`).
  *
- * Headless invocation:
+ * Headless invocation, checked against agent 2026.10.22-27dcf5f:
  * `agent -p --output-format stream-json --stream-partial-output --trust --workspace <cwd> --force -- <prompt>`
  * `-p` is print mode, not the prompt. The prompt is a positional argument
  * after `--`, so a leading dash is not parsed as a flag. `--workspace` and the
  * child process cwd are both the project. `--trust` skips the interactive
  * workspace prompt. `--stream-partial-output` emits text as it arrives.
- * `--force` is omitted when `yolo` is explicitly false.
- * Ephemeral runs delete `.cursor/worktrees/<sessionId>` and `.cursor/sessions/<sessionId>`
- * under the workspace after the process settles.
+ * `--force` is omitted when `yolo` is explicitly false, and in ask or plan
+ * mode (`--mode ask|plan`). `--model` and `--resume <chatId>` are added when
+ * those options are set. This CLI has no system-prompt flag, so `systemPrompt`
+ * is prepended to the prompt. It also has no command that deletes a chat, so
+ * `ephemeral` does not change argv.
  */
 /**
  * Cursor's stream-json mode emits each assistant message twice: a partial
@@ -91,6 +89,7 @@ export class CursorAdapter extends BaseAdapter {
   }
 
   override buildArgs(options: PromptOptions): string[] {
+    const readOnly = options.mode === 'ask' || options.mode === 'plan';
     const args = [
       '-p',
       '--output-format',
@@ -100,8 +99,11 @@ export class CursorAdapter extends BaseAdapter {
       '--workspace',
       options.cwd,
     ];
-    if (options.yolo !== false) args.push('--force');
-    args.push('--', options.prompt);
+    if (readOnly && options.mode) args.push('--mode', options.mode);
+    if (!readOnly && options.yolo !== false) args.push('--force');
+    if (options.model) args.push('--model', options.model);
+    if (options.providerSessionId) args.push('--resume', options.providerSessionId);
+    args.push('--', cursorPrompt(options));
     return args;
   }
 
@@ -132,11 +134,15 @@ export class CursorAdapter extends BaseAdapter {
     }
   }
 
-  protected override async afterExecute(options: PromptOptions, sessionId: string): Promise<void> {
+  protected override async afterExecute(_options: PromptOptions, sessionId: string): Promise<void> {
     this.lines.reset(sessionId);
-    if (options.ephemeral !== true) return;
-    await cleanupCursorEphemeral(options.cwd, sessionId);
   }
+}
+
+function cursorPrompt(options: PromptOptions): string {
+  const instructions = options.systemPrompt;
+  if (!instructions || instructions.trim() === '') return options.prompt;
+  return `<system_instructions>${instructions}</system_instructions>\n${options.prompt}`;
 }
 
 export function parseCursorLine(line: string, sessionId: string): UnifiedStreamEvent[] {
@@ -148,7 +154,14 @@ export function parseCursorLine(line: string, sessionId: string): UnifiedStreamE
   }
 
   const type = eventType(record);
-  if (type === 'system' || type === 'user' || type === 'thinking' || type === 'retry' || type === 'connection') {
+  if (type === 'system') {
+    if ((stringField(record, 'subtype') ?? '').toLowerCase() === 'init') {
+      const info = sessionInfoFromRecord(record, sessionId);
+      if (info) return [info];
+    }
+    return [];
+  }
+  if (type === 'user' || type === 'thinking' || type === 'retry' || type === 'connection') {
     return [];
   }
   if (type === 'error') return [errorEvent(record, sessionId, line)];
@@ -254,41 +267,4 @@ function cursorAggregate(record: Record<string, unknown>, sessionId: string): Un
   const doneText = summary && summary !== spoken ? summary : undefined;
   events.push(doneEvent(sessionId, record, doneText));
   return events;
-}
-
-export async function cleanupCursorEphemeral(cwd: string, sessionId: string): Promise<void> {
-  if (!isSafeSessionId(sessionId)) return;
-  const root = resolve(cwd);
-  for (const bucket of ['worktrees', 'sessions'] as const) {
-    const target = resolve(root, '.cursor', bucket, sessionId);
-    if (!isInside(root, target)) continue;
-    await removeIfExists(target);
-  }
-}
-
-function isSafeSessionId(sessionId: string): boolean {
-  return SAFE_SESSION_ID.test(sessionId) && !sessionId.includes('..');
-}
-
-function isInside(parent: string, target: string): boolean {
-  const root = resolve(parent);
-  const child = resolve(target);
-  if (child === root) return true;
-  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
-  return child.startsWith(prefix);
-}
-
-async function removeIfExists(target: string): Promise<void> {
-  let info: Awaited<ReturnType<typeof lstat>>;
-  try {
-    info = await lstat(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  if (info.isSymbolicLink()) {
-    await unlink(target);
-    return;
-  }
-  await rm(target, { recursive: true, force: true });
 }

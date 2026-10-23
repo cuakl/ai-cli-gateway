@@ -25,7 +25,7 @@ async function main() {
 
   const lines = [
     { type: 'text_delta', text: prompt },
-    { type: 'init', text: 'agy session ready' },
+    { type: 'init', session_id: 'agy-chat', text: 'agy session ready' },
     { type: 'text_delta', text: 'Hello ' },
     { type: 'chunk', delta: 'world' },
     'status: writing styles',

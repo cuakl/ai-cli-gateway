@@ -1,16 +1,12 @@
-import { mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { rm } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { CursorLineParser, parseCursorLine } from '../../src/adapters/cursor.js';
-import {
-  cleanupCursorEphemeral,
-  createAdapter,
-  CursorAdapter,
-  logger,
-  ProcessManager,
-  type ManagedProcessOptions,
-} from '../../src/index.js';
+import { createAdapter, CursorAdapter, logger, ProcessManager, type ManagedProcessOptions } from '../../src/index.js';
 import { collectEvents, ensureFixtures, fixture, resolverFor, tempWorkspace } from './helpers.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('CursorAdapter', () => {
   beforeAll(async () => {
@@ -37,6 +33,54 @@ describe('CursorAdapter', () => {
     expect(adapter.buildArgs({ ...base, yolo: true })).toContain('--force');
     expect(adapter.buildArgs({ ...base, yolo: false })).not.toContain('--force');
     expect(adapter.buildArgs({ ...base, yolo: false })).not.toContain('--yolo');
+    expect(adapter.buildArgs({ ...base, mode: 'agent' })).toContain('--force');
+    expect(adapter.buildArgs({ ...base, mode: 'agent' })).not.toContain('--mode');
+    expect(adapter.buildArgs({ ...base, ephemeral: true })).toEqual(adapter.buildArgs(base));
+  });
+
+  it('maps ask, plan, model, resume, and system prompt without --force', () => {
+    const adapter = new CursorAdapter();
+    const ask = adapter.buildArgs({
+      prompt: 'what color',
+      cwd: '/work/demo',
+      mode: 'ask',
+      model: 'gpt-5',
+      providerSessionId: 'chat_1',
+      systemPrompt: 'Be brief.',
+      ephemeral: true,
+      yolo: true,
+    });
+    expect(ask).toEqual([
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--stream-partial-output',
+      '--trust',
+      '--workspace',
+      '/work/demo',
+      '--mode',
+      'ask',
+      '--model',
+      'gpt-5',
+      '--resume',
+      'chat_1',
+      '--',
+      '<system_instructions>Be brief.</system_instructions>\nwhat color',
+    ]);
+    expect(ask).not.toContain('--force');
+    const plan = adapter.buildArgs({ prompt: 'plan the change', cwd: '/work/demo', mode: 'plan', yolo: true });
+    expect(plan).toContain('--mode');
+    expect(plan).toContain('plan');
+    expect(plan).not.toContain('--force');
+  });
+
+  it('rejects unknown flags the way agent does', async () => {
+    await expect(
+      execFileAsync(process.execPath, [fixture('mock-cursor.js'), '--not-a-real-flag'], { encoding: 'utf8' }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "error: unknown option '--not-a-real-flag'\n",
+    });
   });
 
   it('maps JSON events and aggregate payloads, and logs non-JSON stdout', () => {
@@ -68,6 +112,15 @@ describe('CursorAdapter', () => {
     expect(aggregate[2]?.payload).toEqual({ durationMs: 5, costUsd: 1 });
 
     expect(parseCursorLine(JSON.stringify({ type: 'system', subtype: 'init' }), 'sess')).toEqual([]);
+    expect(
+      parseCursorLine(
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'chat_1', model: 'Auto' }),
+        'sess',
+      ),
+    ).toMatchObject([{ type: 'session_info', payload: { providerSessionId: 'chat_1', model: 'Auto' } }]);
+    expect(
+      parseCursorLine(JSON.stringify({ type: 'user', session_id: 'chat_1', message: { content: [{ text: 'hi' }] } }), 'sess'),
+    ).toEqual([]);
     expect(parseCursorLine(JSON.stringify({ type: 'thinking', subtype: 'delta', text: 'hidden' }), 'sess')).toEqual(
       [],
     );
@@ -121,6 +174,7 @@ describe('CursorAdapter', () => {
       expect(events.some((event) => JSON.stringify(event.payload).includes('cursor-retrieval'))).toBe(false);
       expect(events.map((event) => event.type)).toEqual([
         'init',
+        'session_info',
         'chunk',
         'tool_call',
         'file_edit',
@@ -128,6 +182,11 @@ describe('CursorAdapter', () => {
         'file_edit',
         'done',
       ]);
+      expect(events.filter((event) => event.type === 'session_info')).toHaveLength(1);
+      expect(events.find((event) => event.type === 'session_info')?.payload).toEqual({
+        providerSessionId: 'sess',
+        model: 'Auto',
+      });
       expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0]);
       expect(events.filter((event) => event.type === 'tool_call').map((event) => event.payload.toolCallId)).toEqual([
         'call-hero',
@@ -221,71 +280,34 @@ describe('CursorAdapter', () => {
     }
   });
 
-  it('removes session worktrees and sessions when ephemeral is set', async () => {
-    const cwd = await tempWorkspace('gateway-cursor-ephemeral-');
-    const sessionId = 'sess-1';
+  it('runs ask mode through the mock CLI with model, resume, and a system prompt', async () => {
+    const cwd = await tempWorkspace('gateway-cursor-ask-');
     try {
-      await mkdir(join(cwd, '.cursor', 'worktrees', sessionId), { recursive: true });
-      await mkdir(join(cwd, '.cursor', 'worktrees', 'keep'), { recursive: true });
-      await mkdir(join(cwd, '.cursor', 'sessions', sessionId), { recursive: true });
-      await writeFile(join(cwd, '.cursor', 'worktrees', sessionId, 'HEAD'), 'temp');
-      await writeFile(join(cwd, '.cursor', 'worktrees', 'keep', 'HEAD'), 'stay');
-
       const adapter = createAdapter('cursor', {
         binaries: resolverFor('cursor', fixture('mock-cursor.js')),
         processes: new ProcessManager(),
       });
-      const result = await adapter.execute({ prompt: 'edit', cwd, sessionId, ephemeral: true }, () => {});
+      const { events, onEvent } = collectEvents();
+      const result = await adapter.execute(
+        {
+          prompt: 'what color',
+          cwd,
+          sessionId: 'sess-ask',
+          mode: 'ask',
+          model: 'gpt-5',
+          providerSessionId: 'chat_prior',
+          systemPrompt: 'Be brief.',
+          ephemeral: true,
+          yolo: true,
+        },
+        onEvent,
+      );
       expect(result.exitCode).toBe(0);
-      await expect(stat(join(cwd, '.cursor', 'worktrees', sessionId))).rejects.toThrow();
-      await expect(stat(join(cwd, '.cursor', 'sessions', sessionId))).rejects.toThrow();
-      expect(await readFile(join(cwd, '.cursor', 'worktrees', 'keep', 'HEAD'), 'utf8')).toBe('stay');
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it('leaves session artifacts in place when the run is not ephemeral', async () => {
-    const cwd = await tempWorkspace('gateway-cursor-keep-');
-    const sessionId = 'sess-keep';
-    try {
-      await mkdir(join(cwd, '.cursor', 'worktrees', sessionId), { recursive: true });
-      await writeFile(join(cwd, '.cursor', 'worktrees', sessionId, 'HEAD'), 'stay');
-      const adapter = createAdapter('cursor', {
-        binaries: resolverFor('cursor', fixture('mock-cursor.js')),
-        processes: new ProcessManager(),
+      expect(events.filter((event) => event.type === 'session_info')).toHaveLength(1);
+      expect(events.find((event) => event.type === 'session_info')?.payload).toEqual({
+        providerSessionId: 'sess',
+        model: 'Auto',
       });
-      await adapter.execute({ prompt: 'edit', cwd, sessionId, ephemeral: false }, () => {});
-      expect(await readFile(join(cwd, '.cursor', 'worktrees', sessionId, 'HEAD'), 'utf8')).toBe('stay');
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it('unlinks a session symlink without deleting the target', async () => {
-    const cwd = await tempWorkspace('gateway-cursor-link-');
-    const outside = await tempWorkspace('gateway-cursor-outside-');
-    try {
-      await writeFile(join(outside, 'secret.txt'), 'keep');
-      await mkdir(join(cwd, '.cursor', 'worktrees'), { recursive: true });
-      await symlink(outside, join(cwd, '.cursor', 'worktrees', 'sess-link'));
-      await cleanupCursorEphemeral(cwd, 'sess-link');
-      expect(await readFile(join(outside, 'secret.txt'), 'utf8')).toBe('keep');
-      await expect(stat(join(cwd, '.cursor', 'worktrees', 'sess-link'))).rejects.toThrow();
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-      await rm(outside, { recursive: true, force: true });
-    }
-  });
-
-  it('refuses session ids that could escape the workspace', async () => {
-    const cwd = await tempWorkspace('gateway-cursor-unsafe-');
-    try {
-      await mkdir(join(cwd, '.cursor', 'worktrees', 'keep'), { recursive: true });
-      await writeFile(join(cwd, '.cursor', 'worktrees', 'keep', 'HEAD'), 'stay');
-      await cleanupCursorEphemeral(cwd, '..');
-      await cleanupCursorEphemeral(cwd, '../keep');
-      expect(await readFile(join(cwd, '.cursor', 'worktrees', 'keep', 'HEAD'), 'utf8')).toBe('stay');
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

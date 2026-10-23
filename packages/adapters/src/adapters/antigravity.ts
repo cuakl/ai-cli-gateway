@@ -14,6 +14,7 @@ import {
   ignoreNonJsonStdout,
   isToolResultType,
   parseJsonRecord,
+  sessionInfoFromRecord,
   stringField,
   textChunk,
   toolResultEvent,
@@ -24,8 +25,10 @@ import {
  *
  * Headless invocation:
  * `agy --print "<prompt>" --output-format stream-json --workspace <cwd>`
- * `--print` is the long form of `-p`. A session id adds `--conversation <id>`
+ * `--print` is the long form of `-p`. `providerSessionId` adds `--conversation <id>`
  * (the id-bearing form of `--continue`). Context files are repeated `--file` args.
+ * This binary was not available to check flags. Mode, model, system prompt, and
+ * ephemeral are not mapped.
  */
 export class AntigravityAdapter extends BaseAdapter {
   override readonly provider = 'antigravity' as const;
@@ -39,7 +42,7 @@ export class AntigravityAdapter extends BaseAdapter {
       '--workspace',
       options.cwd,
     ];
-    if (options.sessionId) args.push('--conversation', options.sessionId);
+    if (options.providerSessionId) args.push('--conversation', options.providerSessionId);
     if (options.files?.length) {
       for (const file of options.files) {
         if (file.length > 0) args.push('--file', file);
@@ -60,6 +63,8 @@ export function parseAntigravityLine(line: string, sessionId: string): UnifiedSt
   const type = eventType(record);
   if (type === 'error') return [errorEvent(record, sessionId, line)];
   if (type === 'init' || type === 'session' || type === 'session_start') {
+    const info = sessionInfoFromRecord(record, sessionId);
+    if (info) return [info];
     const text = extractText(record);
     return [createStreamEvent(sessionId, 'init', text ? { text } : {})];
   }

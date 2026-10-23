@@ -11,6 +11,7 @@ import {
   isToolCallType,
   ignoreNonJsonStdout,
   parseJsonRecord,
+  sessionInfoFromRecord,
   stringField,
   textChunk,
   toolResultEvent,
@@ -19,7 +20,6 @@ import {
 export const DEFAULT_CLAUDE_TOOLS = ['Read', 'Edit', 'Bash', 'Glob', 'Grep'] as const;
 
 const IGNORED_TYPES = new Set([
-  'system',
   'ping',
   'message_start',
   'message_stop',
@@ -27,23 +27,29 @@ const IGNORED_TYPES = new Set([
   'content_block_stop',
 ]);
 
+const READ_ONLY_CLAUDE_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+
 /**
  * Claude Code CLI (`claude`).
  *
  * Agent mode, checked against Claude Code 2.1.173:
  * `claude -p "<prompt>" --output-format stream-json --verbose --include-partial-messages --permission-mode acceptEdits --allowedTools <list>`
- * `--verbose` is required. Without it, stream-json with `-p` exits immediately.
- * `--include-partial-messages` emits `stream_event` text deltas and then an
- * `assistant` message with the same text. Deltas are kept; the repeat is not.
- * `--bare` is omitted so an existing Claude Code login still works.
+ * Ask and plan use `--permission-mode plan` and `--allowedTools Read,Glob,Grep`.
+ * `--model`, `--append-system-prompt`, `--resume`, and `--no-session-persistence`
+ * are passed when those options are set. `--verbose` is required. Without it,
+ * stream-json with `-p` exits immediately. `--include-partial-messages` emits
+ * `stream_event` text deltas and then an `assistant` message with the same
+ * text. Deltas are kept; the repeat is not. `--bare` is omitted so an existing
+ * Claude Code login still works.
  */
 export class ClaudeAdapter extends BaseAdapter {
   override readonly provider = 'claude' as const;
   private readonly lines = new ClaudeLineParser();
 
   override buildArgs(options: PromptOptions): string[] {
-    const tools = options.allowedTools ?? [...DEFAULT_CLAUDE_TOOLS];
-    return [
+    const readOnly = options.mode === 'ask' || options.mode === 'plan';
+    const tools = readOnly ? [...READ_ONLY_CLAUDE_TOOLS] : (options.allowedTools ?? [...DEFAULT_CLAUDE_TOOLS]);
+    const args = [
       '-p',
       options.prompt,
       '--output-format',
@@ -51,10 +57,17 @@ export class ClaudeAdapter extends BaseAdapter {
       '--verbose',
       '--include-partial-messages',
       '--permission-mode',
-      'acceptEdits',
+      readOnly ? 'plan' : 'acceptEdits',
       '--allowedTools',
       tools.join(','),
     ];
+    if (options.model) args.push('--model', options.model);
+    if (options.systemPrompt && options.systemPrompt.trim() !== '') {
+      args.push('--append-system-prompt', options.systemPrompt);
+    }
+    if (options.providerSessionId) args.push('--resume', options.providerSessionId);
+    if (options.ephemeral === true) args.push('--no-session-persistence');
+    return args;
   }
 
   protected override parseStdoutLine(line: string, sessionId: string): UnifiedStreamEvent[] {
@@ -119,6 +132,13 @@ function eventsFromClaudeRecord(
   line: string,
 ): UnifiedStreamEvent[] {
   const type = eventType(record);
+  if (type === 'system') {
+    if ((stringField(record, 'subtype') ?? '').toLowerCase() === 'init') {
+      const info = sessionInfoFromRecord(record, sessionId);
+      if (info) return [info];
+    }
+    return [];
+  }
   if (type === 'error') return [errorEvent(record, sessionId, line)];
 
   const delta = isRecord(record.delta) ? record.delta : undefined;

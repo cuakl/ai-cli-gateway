@@ -34,6 +34,55 @@ describe('ClaudeAdapter', () => {
     expect(args).not.toContain('--permission-prompts');
   });
 
+  it('maps ask, plan, model, resume, system prompt, and ephemeral', () => {
+    const adapter = new ClaudeAdapter();
+    expect(
+      adapter.buildArgs({
+        prompt: 'where is the color',
+        cwd: '/repo',
+        mode: 'ask',
+        model: 'sonnet',
+        providerSessionId: 'cli-sess',
+        systemPrompt: 'Answer briefly.',
+        ephemeral: true,
+        allowedTools: ['Bash'],
+      }),
+    ).toEqual([
+      '-p',
+      'where is the color',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--permission-mode',
+      'plan',
+      '--allowedTools',
+      'Read,Glob,Grep',
+      '--model',
+      'sonnet',
+      '--append-system-prompt',
+      'Answer briefly.',
+      '--resume',
+      'cli-sess',
+      '--no-session-persistence',
+    ]);
+    const plan = adapter.buildArgs({ prompt: 'plan it', cwd: '/repo', mode: 'plan' });
+    expect(plan).toContain('plan');
+    expect(plan).toContain('Read,Glob,Grep');
+    expect(plan).not.toContain('acceptEdits');
+    const agent = adapter.buildArgs({
+      prompt: 'fix',
+      cwd: '/repo',
+      mode: 'agent',
+      model: 'opus',
+      ephemeral: false,
+    });
+    expect(agent).toContain('acceptEdits');
+    expect(agent).toContain('--model');
+    expect(agent).toContain('opus');
+    expect(agent).not.toContain('--no-session-persistence');
+  });
+
   it('rejects unknown flags the way claude does', async () => {
     await expect(
       execFileAsync(process.execPath, [fixture('mock-claude.js'), '--permission-prompts', 'none'], {
@@ -72,6 +121,12 @@ describe('ClaudeAdapter', () => {
     });
 
     expect(parseClaudeLine(JSON.stringify({ type: 'system', subtype: 'init' }), 'sess')).toEqual([]);
+    expect(
+      parseClaudeLine(
+        JSON.stringify({ type: 'system', subtype: 'init', session_id: 'cli-sess', model: 'sonnet' }),
+        'sess',
+      ),
+    ).toMatchObject([{ type: 'session_info', payload: { providerSessionId: 'cli-sess', model: 'sonnet' } }]);
     expect(
       parseClaudeLine(
         JSON.stringify({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '{' } }),
@@ -129,6 +184,7 @@ describe('ClaudeAdapter', () => {
       expect(result.summary).toBe('Looking at the button');
       expect(events.map((event) => event.type)).toEqual([
         'init',
+        'session_info',
         'chunk',
         'chunk',
         'tool_call',
@@ -136,6 +192,10 @@ describe('ClaudeAdapter', () => {
         'tool_result',
         'done',
       ]);
+      expect(events.filter((event) => event.type === 'session_info')).toHaveLength(1);
+      expect(events.find((event) => event.type === 'session_info')?.payload).toEqual({
+        providerSessionId: 'cli-sess',
+      });
       expect(events.every((event) => event.sessionId === 'sess-claude')).toBe(true);
       expect(events.filter((event) => event.type === 'chunk').map((event) => event.payload.segment)).toEqual([0, 0]);
       expect(events.find((event) => event.type === 'tool_call')?.payload.toolName).toBe('Edit');
@@ -149,6 +209,32 @@ describe('ClaudeAdapter', () => {
         costUsd: 0.02,
         text: 'Updated styles',
       });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('runs plan mode through the mock CLI with model, resume, system prompt, and ephemeral', async () => {
+    const cwd = await tempWorkspace('gateway-claude-plan-');
+    try {
+      const adapter = createAdapter('claude', {
+        binaries: resolverFor('claude', fixture('mock-claude.js')),
+        processes: new ProcessManager(),
+      });
+      const result = await adapter.execute(
+        {
+          prompt: 'where is the color',
+          cwd,
+          sessionId: 'sess-plan',
+          mode: 'plan',
+          model: 'sonnet',
+          providerSessionId: 'cli-sess',
+          systemPrompt: 'Answer briefly.',
+          ephemeral: true,
+        },
+        () => {},
+      );
+      expect(result.exitCode).toBe(0);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

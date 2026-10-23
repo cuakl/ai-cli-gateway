@@ -148,7 +148,7 @@ curl -s http://127.0.0.1:4100/api/v1/prompt \
   }'
 ```
 
-A successful body is `{ exitCode, summary, events }`. `events` is the unified stream: `init`, `chunk`, `tool_call`, `tool_result`, `file_edit`, `error`, and `done`.
+A successful body is `{ exitCode, summary, events }`. `events` is the unified stream: `init`, `session_info`, `chunk`, `tool_call`, `tool_result`, `file_edit`, `error`, and `done`. `session_info` carries `providerSessionId` and, when the CLI reports one, `model`.
 
 ### Session and Server-Sent Events
 
@@ -191,7 +191,7 @@ data: {"id":"...","sessionId":"sess_01H...","type":"done","timestamp":1760990001
 
 `GET /api/v1/sessions/:id` returns the session record: `id`, `provider`, `cwd`, `status`, `createdAt`, `updatedAt`, and `exitCode` once the run has finished. It does not include events. Events are the SSE stream at `GET /api/v1/sessions/:id/stream`. `DELETE /api/v1/sessions/:id` aborts a running session.
 
-`ephemeral: true` asks the Cursor adapter to delete `.cursor/worktrees/<sessionId>` and `.cursor/sessions/<sessionId>` after the process exits. Other providers ignore it.
+`ephemeral: true` tells Claude Code to pass `--no-session-persistence`, so that run is not saved as a resumable chat. Cursor's `agent` CLI has no delete-chat command, so the same field does not remove a Cursor chat.
 
 ### WebSocket
 
@@ -211,13 +211,15 @@ The server replies with `{ "type": "ready", "sessionId": "..." }`, then `{ "type
 | `cwd` | yes | Working directory. Must be an existing directory inside a registered project. A browser token is limited to its own project. |
 | `prompt` | yes | The instruction. The overlay appends a `<frontend_context>` block. |
 | `files` | no | Extra files to show the CLI. Each path must stay inside the root. Antigravity receives them as repeated `--file` arguments. |
-| `sessionId` | no | Reuse an id. Codex uses it as `codex exec resume <id>`. Antigravity uses it as `--conversation`. |
-| `yolo` | no | Cursor passes `--force` unless this is `false`. |
-| `allowedTools` | no | Claude's `--allowedTools` list. The default is Read, Edit, Bash, Glob, and Grep. |
-| `ephemeral` | no | Cursor-only cleanup of that session's worktree, described above. |
+| `sessionId` | no | Gateway id for this run's events. |
+| `providerSessionId` | no | CLI chat id from `session_info`. Cursor and Claude pass `--resume`. Codex passes `resume`. Antigravity passes `--conversation`. |
+| `mode` | no | `agent` (the default when omitted), `ask`, or `plan`. Ask and plan are read-only. Cursor passes `--mode` and omits `--force`. Claude uses `--permission-mode plan` and tools `Read,Glob,Grep`. |
+| `model` | no | Cursor and Claude pass `--model`. |
+| `yolo` | no | In Cursor agent mode, `--force` is passed unless this is `false`. Ask and plan never pass `--force`. |
+| `allowedTools` | no | Claude's `--allowedTools` list in agent mode. The default is Read, Edit, Bash, Glob, and Grep. Ask and plan use Read, Glob, and Grep. |
+| `systemPrompt` | no | Cursor prepends it inside `<system_instructions>`. Claude passes `--append-system-prompt`. |
+| `ephemeral` | no | Claude passes `--no-session-persistence`. Cursor has no matching flag. |
 | `timeoutMs` | no | Overrides the 5 minute watchdog for this run. |
-
-The schema also accepts `systemPrompt`. The adapters build their argv from `prompt`, `cwd`, tools, and the session id, so extra instructions belong in `prompt`.
 
 ### Errors
 

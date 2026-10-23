@@ -17,6 +17,7 @@ import {
   ignoreNonJsonStdout,
   isToolResultType,
   parseJsonRecord,
+  sessionInfoFromRecord,
   stringField,
   textChunk,
   toolResultEvent,
@@ -27,15 +28,17 @@ import {
  *
  * Headless invocation:
  * `codex exec --jsonl --sandbox workspace-write "<prompt>"`
- * A session id inserts `resume <id>` after `exec`.
+ * `providerSessionId` inserts `resume <id>` after `exec`. Ask and plan use
+ * `--sandbox read-only`. This binary was not available to check flags.
  */
 export class CodexAdapter extends BaseAdapter {
   override readonly provider = 'codex' as const;
 
   override buildArgs(options: PromptOptions): string[] {
+    const readOnly = options.mode === 'ask' || options.mode === 'plan';
     const args = ['exec'];
-    if (options.sessionId) args.push('resume', options.sessionId);
-    args.push('--jsonl', '--sandbox', 'workspace-write', options.prompt);
+    if (options.providerSessionId) args.push('resume', options.providerSessionId);
+    args.push('--jsonl', '--sandbox', readOnly ? 'read-only' : 'workspace-write', options.prompt);
     return args;
   }
 
@@ -74,6 +77,10 @@ export function parseCodexLine(line: string, sessionId: string): UnifiedStreamEv
   if (isTextType(type)) return [textChunk(sessionId, extractText(record) ?? line)];
 
   if (type === 'thread.started' || type === 'turn.started' || type === 'session.started') {
+    if (type !== 'turn.started') {
+      const info = sessionInfoFromRecord(record, sessionId);
+      if (info) return [info];
+    }
     const text = extractText(record);
     return [createStreamEvent(sessionId, 'init', text ? { text } : {})];
   }
