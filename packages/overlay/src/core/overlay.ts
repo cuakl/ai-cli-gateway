@@ -5,13 +5,7 @@ import { OVERLAY_CSS } from '../styles.js';
 import { DEFAULT_GATEWAY_URL, OVERLAY_TAG, type DevtoolsConfig, type OverlayTheme } from '../types.js';
 import { App } from '../ui/App.js';
 import { parseDockMode } from '../ui/layout/geometry.js';
-import {
-  AID_FONT,
-  AID_Z_HOST,
-  DARK_PALETTE,
-  LIGHT_PALETTE,
-  parseTheme,
-} from '../ui/theme/tokens.js';
+import { AID_FONT, AID_Z_HOST, applyHostTheme, parseTheme } from '../ui/theme/tokens.js';
 
 interface InjectedDevtoolsConfig {
   gatewayUrl?: string;
@@ -86,13 +80,6 @@ export class AiDevtoolsElement extends HTMLElement {
 
   private applyHostStyles(): void {
     const theme = this.resolvedTheme();
-    this.setAttribute('data-theme', theme);
-    const prefersLight =
-      theme === 'light' ||
-      (theme === 'system' &&
-        typeof matchMedia === 'function' &&
-        matchMedia('(prefers-color-scheme: light)').matches);
-    const palette = prefersLight ? LIGHT_PALETTE : DARK_PALETTE;
     const style = this.style;
     // `all: initial` keeps the host page from painting this element, but it also
     // resets color and font to the UA initial values (black, usually a serif).
@@ -106,14 +93,13 @@ export class AiDevtoolsElement extends HTMLElement {
     style.setProperty('z-index', String(AID_Z_HOST));
     style.setProperty('pointer-events', 'none');
     style.setProperty('display', 'block');
-    style.setProperty('color-scheme', theme === 'light' ? 'light' : theme === 'system' ? 'light dark' : 'dark');
     style.setProperty('font-family', AID_FONT);
     style.setProperty('font-size', '14px');
     style.setProperty('line-height', '1.5');
     style.setProperty('font-weight', '400');
     style.setProperty('letter-spacing', '-0.011em');
-    style.setProperty('color', palette.text);
     style.setProperty('-webkit-font-smoothing', 'antialiased');
+    applyHostTheme(this, theme);
   }
 
   private ensureStyle(): void {

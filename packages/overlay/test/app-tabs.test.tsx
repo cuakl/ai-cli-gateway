@@ -149,7 +149,7 @@ describe('overlay tabs', () => {
     textarea.value = 'Make it emerald';
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(shadow?.textContent).toContain('Review the diffs'));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('Edited 1 file'));
     const start = workspace.sent.find((message) => message.type === 'run.start');
     expect(start).toMatchObject({
       type: 'run.start',
@@ -161,7 +161,7 @@ describe('overlay tabs', () => {
     expect(start?.prompt).not.toContain('<frontend_context>');
     (shadow?.querySelector('[data-action="review-diffs"]') as HTMLButtonElement).click();
     expect(shadow?.querySelector('[aria-label="Diffs"]')).toBeTruthy();
-    expect(shadow?.textContent).not.toContain('Review the diffs');
+    expect(shadow?.textContent).not.toContain('Edited 1 file');
   });
 
   it('updates the diff badge when the workspace pushes git.changed', async () => {

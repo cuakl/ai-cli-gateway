@@ -15,9 +15,17 @@ export const TOOLBAR_CSS = `
   border-radius: var(--aid-radius-full);
   box-shadow: var(--aid-shadow-lg);
   backdrop-filter: blur(16px);
+  transition:
+    left var(--aid-dur) var(--aid-ease),
+    right var(--aid-dur) var(--aid-ease),
+    top var(--aid-dur) var(--aid-ease),
+    bottom var(--aid-dur) var(--aid-ease);
 }
 
-.pill-dragging { cursor: grabbing; }
+.pill-dragging {
+  cursor: grabbing;
+  transition: none;
+}
 
 .pill-grip {
   flex: none;

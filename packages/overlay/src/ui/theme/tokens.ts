@@ -69,6 +69,22 @@ export function parseTheme(value: unknown): OverlayTheme | undefined {
   return undefined;
 }
 
+export function resolvedPalette(theme: OverlayTheme): ThemePalette {
+  const prefersLight =
+    theme === 'light' ||
+    (theme === 'system' &&
+      typeof matchMedia === 'function' &&
+      matchMedia('(prefers-color-scheme: light)').matches);
+  return prefersLight ? LIGHT_PALETTE : DARK_PALETTE;
+}
+
+export function applyHostTheme(host: HTMLElement, theme: OverlayTheme): void {
+  host.setAttribute('data-theme', theme);
+  const palette = resolvedPalette(theme);
+  host.style.setProperty('color-scheme', theme === 'light' ? 'light' : theme === 'system' ? 'light dark' : 'dark');
+  host.style.setProperty('color', palette.text);
+}
+
 function paletteCustomProperties(palette: ThemePalette): string {
   return `
   --aid-bg: ${palette.bg};

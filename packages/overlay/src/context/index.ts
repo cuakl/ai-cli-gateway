@@ -31,16 +31,26 @@ export function uninstallContextCollectors(): void {
   uninstallNetworkCapture();
 }
 
+export interface GatherContextOptions {
+  screenshot?: boolean;
+  consoleErrors?: boolean;
+  failedRequests?: boolean;
+}
+
 export async function gatherContext(
   selectedElement?: SelectedElement,
   element?: Element | null,
+  options: GatherContextOptions = {},
 ): Promise<FrontendContextPayload> {
-  const screenshot = element ? await captureElement(element) : undefined;
+  const attachScreenshot = options.screenshot !== false;
+  const attachConsole = options.consoleErrors !== false;
+  const attachNetwork = options.failedRequests !== false;
+  const screenshot = attachScreenshot && element ? await captureElement(element) : undefined;
   return FrontendContextPayloadSchema.parse({
     ...(selectedElement ? { selectedElement } : {}),
     ...(screenshot ? { screenshotBase64: screenshot } : {}),
-    recentErrors: getErrors(),
-    recentConsoleLogs: getConsoleLogs(),
-    failedNetworkRequests: getFailedNetworkRequests(),
+    recentErrors: attachConsole ? getErrors() : [],
+    recentConsoleLogs: attachConsole ? getConsoleLogs() : [],
+    failedNetworkRequests: attachNetwork ? getFailedNetworkRequests() : [],
   });
 }

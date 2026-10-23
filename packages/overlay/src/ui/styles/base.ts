@@ -46,7 +46,9 @@ code, pre { font-family: var(--aid-mono); }
 .side-dock button,
 .bottom-dock button,
 .suggestions button,
-.notice button {
+.notice button,
+.toast button,
+.palette-item {
   border: 0;
   background: transparent;
   cursor: pointer;

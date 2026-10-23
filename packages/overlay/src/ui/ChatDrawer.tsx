@@ -2,6 +2,7 @@ import type { ProviderType, SelectedElement } from '@aidev/protocol';
 import { selectionChipLabel } from '../inspector/locator.js';
 import { EmptyState } from './EmptyState.js';
 import { MessageSquareIcon, XIcon } from './icons.js';
+import { sendShortcutHint } from './keyboard.js';
 
 export interface ChatLine {
   id: string;
@@ -155,7 +156,7 @@ export function ChatDrawer({
           }}
         />
         <div className="composer-actions">
-          <span className="shortcut">⌘ Enter</span>
+          <span className="shortcut">{sendShortcutHint()}</span>
           {sending ? (
             <button type="button" className="ghost" data-action="stop" onClick={onStop}>
               Stop

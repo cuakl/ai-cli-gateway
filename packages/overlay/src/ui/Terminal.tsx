@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 import xtermCss from '@xterm/xterm/css/xterm.css?inline';
+import { createPtyFitController } from './layout/pty-fit.js';
 import { AID_MONO, DARK_PALETTE } from './theme/tokens.js';
 import type { WorkspaceConnection } from './workspace-client.js';
 
@@ -53,14 +54,22 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
         await waitForSize(host);
         if (cancelled) return;
         term.open(host);
-        const safeFit = (): void => {
-          if (host.clientWidth === 0 || host.clientHeight === 0) return;
+        const safeFit = (): { cols: number; rows: number } | null => {
+          if (host.clientWidth === 0 || host.clientHeight === 0) return null;
           try {
             fit.fit();
           } catch {
             // The dock may not have a size on the first frame.
           }
+          return term ? { cols: term.cols, rows: term.rows } : null;
         };
+        const controller = createPtyFitController({
+          fit: safeFit,
+          sendResize(id, cols, rows) {
+            workspace.send({ type: 'pty.resize', sessionId: id, cols, rows });
+          },
+        });
+        cleanups.push(() => controller.dispose());
         safeFit();
 
         const offData = workspace.on('pty.data', (message) => {
@@ -80,13 +89,13 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
           else workspace.send({ type: 'pty.input', sessionId, data });
         });
         const resize = term.onResize(({ cols, rows }) => {
-          if (sessionId) workspace.send({ type: 'pty.resize', sessionId, cols, rows });
+          controller.handleTermResize(cols, rows);
         });
         cleanups.push(() => input.dispose(), () => resize.dispose());
 
         if (typeof ResizeObserver !== 'undefined') {
           const observer = new ResizeObserver(() => {
-            safeFit();
+            controller.notifyHostResize();
           });
           observer.observe(host);
           cleanups.push(() => observer.disconnect());
@@ -102,6 +111,7 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
           return;
         }
         sessionId = session.sessionId;
+        controller.setSession(session.sessionId, { cols: term.cols || 80, rows: term.rows || 24 });
         for (const chunk of pendingOutput.splice(0)) {
           if (chunk.id === sessionId) term.write(chunk.data);
         }

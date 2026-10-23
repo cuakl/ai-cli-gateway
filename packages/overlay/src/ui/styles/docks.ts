@@ -22,14 +22,19 @@ export const DOCKS_CSS = `
   top: 0;
   right: 0;
   bottom: 0;
+  height: 100%;
+  z-index: calc(var(--aid-z-dock) + 1);
   border-left: 1px solid var(--aid-border);
+  transition: width var(--aid-dur) var(--aid-ease);
 }
 
 .bottom-dock {
   left: 0;
   right: 0;
   bottom: 0;
+  z-index: var(--aid-z-dock);
   border-top: 1px solid var(--aid-border);
+  transition: height var(--aid-dur) var(--aid-ease), right var(--aid-dur) var(--aid-ease);
 }
 
 .side-dock.sheet,

@@ -6,20 +6,24 @@ import { ElementPicker } from '../inspector/picker.js';
 import { DEFAULT_GATEWAY_URL, type DevtoolsConfig, type ProviderStatus } from '../types.js';
 import { BottomDock } from './BottomDock.js';
 import { ChatDrawer, type ChatLine } from './ChatDrawer.js';
+import { CommandPalette, type PaletteItem } from './CommandPalette.js';
 import { DiffViewer } from './DiffViewer.js';
-import { XIcon } from './icons.js';
+import {
+  eventInsideOverlay,
+  isEditableTarget,
+  isInspectChord,
+  isPaletteChord,
+  isStopChord,
+} from './keyboard.js';
 import { LauncherPill, type PillStatus } from './LauncherPill.js';
 import {
   BOTTOM_DEFAULT,
-  PILL_HEIGHT,
-  SIDE_CHAT_DEFAULT,
   type BottomTab,
   type DockMode,
   type PillCorner,
   type SideTab,
   clampBottomHeight,
   clampSideWidth,
-  defaultSideWidth,
   isCompactViewport,
   isSheetViewport,
   pillOffset,
@@ -28,9 +32,21 @@ import {
   shouldPush,
 } from './layout/geometry.js';
 import { applyDocumentPush, restoreDocumentPush, snapshotDocumentPush, type PushSnapshot } from './layout/push.js';
+import {
+  DEFAULT_AUTO_ATTACH,
+  locSelector,
+  loadPrefs,
+  loadSession,
+  savePrefs,
+  saveSession,
+  type AutoAttachPrefs,
+} from './prefs.js';
+import { SettingsModal } from './SettingsModal.js';
 import { SideDock } from './SideDock.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
+import { applyHostTheme, type OverlayTheme } from './theme/tokens.js';
+import { ToastStack, type Toast } from './ToastStack.js';
 import {
   WorkspaceClient,
   WorkspaceError,
@@ -42,7 +58,14 @@ export interface AppProps {
   config: DevtoolsConfig;
 }
 
-const REVIEW_NOTICE = 'The agent edited files. Review the diffs before committing.';
+const TOAST_MS = 6_000;
+
+const PROVIDER_LABELS: Array<{ id: ProviderType; label: string }> = [
+  { id: 'cursor', label: 'Cursor' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'antigravity', label: 'Antigravity' },
+];
 
 const disconnectedWorkspace: WorkspaceConnection = {
   state: 'closed',
@@ -59,32 +82,47 @@ const disconnectedWorkspace: WorkspaceConnection = {
   close() {},
 };
 
+
 export function App({ config }: AppProps) {
+  const storedPrefs = useMemo(() => loadPrefs(), []);
+  const storedSession = useMemo(() => loadSession(config.projectId ?? 'default'), [config.projectId]);
   const [inspecting, setInspecting] = useState(false);
-  const [sideOpen, setSideOpen] = useState(false);
-  const [sideTab, setSideTab] = useState<SideTab>('chat');
-  const [bottomOpen, setBottomOpen] = useState(false);
-  const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
-  const [terminalMounted, setTerminalMounted] = useState(false);
-  const [sideWidth, setSideWidth] = useState(SIDE_CHAT_DEFAULT);
-  const [bottomHeight, setBottomHeight] = useState(BOTTOM_DEFAULT);
-  const [pillCorner, setPillCorner] = useState<PillCorner>('bottom-right');
+  const [sideOpen, setSideOpen] = useState(storedSession.sideOpen ?? false);
+  const [sideTab, setSideTab] = useState<SideTab>(storedSession.sideTab ?? 'chat');
+  const [bottomOpen, setBottomOpen] = useState(storedSession.bottomOpen ?? false);
+  const [bottomTab, setBottomTab] = useState<BottomTab>(storedSession.bottomTab ?? 'terminal');
+  const [terminalMounted, setTerminalMounted] = useState(
+    () => Boolean(storedSession.bottomOpen && storedSession.bottomTab === 'terminal'),
+  );
+  const [sideWidth, setSideWidth] = useState(storedPrefs.sideWidth ?? 420);
+  const [bottomHeight, setBottomHeight] = useState(storedPrefs.bottomHeight ?? BOTTOM_DEFAULT);
+  const [pillCorner, setPillCorner] = useState<PillCorner>(storedPrefs.pillCorner ?? 'bottom-right');
+  const [theme, setTheme] = useState<OverlayTheme>(storedPrefs.theme ?? config.theme ?? 'dark');
+  const [dockMode, setDockMode] = useState<DockMode>(storedPrefs.dockMode ?? config.dock ?? 'push');
+  const [autoAttach, setAutoAttach] = useState<AutoAttachPrefs>(storedPrefs.autoAttach ?? { ...DEFAULT_AUTO_ATTACH });
   const [viewport, setViewport] = useState(readViewport());
   const [chatUnread, setChatUnread] = useState(false);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
+  const [connectionState, setConnectionState] = useState<WorkspaceConnectionState>('closed');
   const [selected, setSelected] = useState<SelectedElement | null>(null);
-  const [provider, setProvider] = useState<ProviderType>('cursor');
+  const [provider, setProvider] = useState<ProviderType>(storedPrefs.provider ?? 'cursor');
   const [availability, setAvailability] = useState<Partial<Record<ProviderType, boolean>>>({});
-  const providerTouched = useRef(false);
-  const [prompt, setPrompt] = useState('');
+  const [gatewayVersion, setGatewayVersion] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const providerTouched = useRef(storedPrefs.provider != null);
+  const [prompt, setPrompt] = useState(storedSession.prompt ?? '');
   const [messages, setMessages] = useState<ChatLine[]>([]);
   const [sending, setSending] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(storedSession.threadId ?? null);
   const [summary, setSummary] = useState<GitDiffSummary | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffCount, setDiffCount] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
   const elementRef = useRef<Element | null>(null);
+  const selectedLocRef = useRef<string | null>(storedSession.selectedLoc ?? null);
   const pickerRef = useRef<ElementPicker | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const stopRun = useRef<(() => void) | null>(null);
@@ -92,33 +130,63 @@ export function App({ config }: AppProps) {
   const pushSnapshot = useRef<PushSnapshot | null>(null);
   const skipSideFocus = useRef(true);
   const skipBottomFocus = useRef(true);
+  const pendingTestRun = useRef(false);
   const sideOpenRef = useRef(sideOpen);
   const sideTabRef = useRef(sideTab);
   const inspectingRef = useRef(inspecting);
   const bottomOpenRef = useRef(bottomOpen);
   const bottomTabRef = useRef(bottomTab);
+  const paletteOpenRef = useRef(paletteOpen);
+  const settingsOpenRef = useRef(settingsOpen);
+  const hiddenRef = useRef(hidden);
+  const sendingRef = useRef(sending);
   sideOpenRef.current = sideOpen;
   sideTabRef.current = sideTab;
   inspectingRef.current = inspecting;
   bottomOpenRef.current = bottomOpen;
   bottomTabRef.current = bottomTab;
+  paletteOpenRef.current = paletteOpen;
+  settingsOpenRef.current = settingsOpen;
+  hiddenRef.current = hidden;
+  sendingRef.current = sending;
 
-  const dockMode: DockMode = config.dock ?? 'push';
   const sheet = isSheetViewport(viewport.width);
   const compact = isCompactViewport(viewport.width);
   const pushEnabled = shouldPush(dockMode, sheet);
   const pillStatus: PillStatus = sending ? 'running' : status === 'connected' ? 'connected' : 'idle';
   const offset = pillOffset(pillCorner, sideOpen, bottomOpen, sideWidth, bottomHeight, sheet);
+  const projectKey = config.projectId ?? 'default';
+  const gatewayUrl = config.gatewayUrl ?? DEFAULT_GATEWAY_URL;
 
   const workspace = useMemo<WorkspaceConnection>(() => {
     if (config.workspace) return config.workspace;
     if (!config.projectId || !config.browserToken) return disconnectedWorkspace;
     return new WorkspaceClient({
-      gatewayUrl: config.gatewayUrl ?? DEFAULT_GATEWAY_URL,
+      gatewayUrl,
       projectId: config.projectId,
       browserToken: config.browserToken,
     });
-  }, [config.browserToken, config.gatewayUrl, config.projectId, config.workspace]);
+  }, [config.browserToken, config.projectId, config.workspace, gatewayUrl]);
+
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const known = Object.keys(availability).length > 0;
+    const providers = PROVIDER_LABELS.filter((item) => !known || availability[item.id] === true).map((item) => ({
+      id: `provider:${item.id}`,
+      group: 'Provider' as const,
+      label: `Switch to ${item.label}`,
+    }));
+    const actions: PaletteItem[] = [
+      { id: 'inspect', group: 'Actions', label: 'Inspect element' },
+      { id: 'new-chat', group: 'Actions', label: 'New chat' },
+      { id: 'review', group: 'Actions', label: 'Open Review' },
+      { id: 'run-tests', group: 'Actions', label: 'Run tests' },
+      { id: 'terminal', group: 'Actions', label: 'Open terminal' },
+      { id: 'toggle-theme', group: 'Actions', label: 'Toggle theme' },
+      { id: 'settings', group: 'Actions', label: 'Settings' },
+      { id: 'hide', group: 'Actions', label: 'Hide toolbar until reload' },
+    ];
+    return [...actions, ...providers];
+  }, [availability]);
 
   const refreshDiffs = useCallback(async (): Promise<number> => {
     setDiffLoading(true);
@@ -127,7 +195,7 @@ export function App({ config }: AppProps) {
       setSummary(result.summary);
       setDiffCount(result.summary.files.length);
       setDiffError(null);
-      if (result.summary.files.length === 0) setNotice(null);
+      if (result.summary.files.length === 0) dismissToastsMatching('Edited');
       return result.summary.files.length;
     } catch (error) {
       const message = visibleDiffError(error);
@@ -137,6 +205,29 @@ export function App({ config }: AppProps) {
       setDiffLoading(false);
     }
   }, [workspace]);
+
+  function overlayHost(): Element | null {
+    const root = shellRef.current?.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  }
+
+  function applyTheme(next: OverlayTheme): void {
+    setTheme(next);
+    const host = overlayHost();
+    if (host instanceof HTMLElement) applyHostTheme(host, next);
+  }
+
+  function pushToast(toast: Omit<Toast, 'id'> & { id?: string }): void {
+    const id = toast.id ?? createId();
+    setToasts((current) => [...current, { ...toast, id }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, TOAST_MS);
+  }
+
+  function dismissToastsMatching(needle: string): void {
+    setToasts((current) => current.filter((item) => !item.text.includes(needle)));
+  }
 
   useEffect(() => {
     if (config.workspace || workspace === disconnectedWorkspace) return;
@@ -155,6 +246,7 @@ export function App({ config }: AppProps) {
     const picker = new ElementPicker({
       onSelect(element) {
         elementRef.current = element;
+        selectedLocRef.current = element.getAttribute('data-loc');
         setSelected(locateElement(element));
         setInspecting(false);
         setSideTab('chat');
@@ -192,12 +284,13 @@ export function App({ config }: AppProps) {
       setDiffCount(message.summary.files.length);
       setDiffError(null);
       setDiffLoading(false);
-      if (message.summary.files.length === 0) setNotice(null);
+      if (message.summary.files.length === 0) dismissToastsMatching('Edited');
     });
   }, [refreshDiffs, workspace]);
 
   useLayoutEffect(() => {
     const apply = (state: WorkspaceConnectionState): void => {
+      setConnectionState(state);
       setStatus(state === 'open' ? 'connected' : 'idle');
       if (state === 'open') void refreshDiffs();
     };
@@ -210,13 +303,14 @@ export function App({ config }: AppProps) {
     const load = (): void => {
       const token = config.browserToken;
       if (!token || workspace.state !== 'open') return;
-      const gatewayUrl = config.gatewayUrl ?? DEFAULT_GATEWAY_URL;
-      void fetchProviderAvailability(gatewayUrl, token)
-        .then((listed) => {
-          if (cancelled || listed.length === 0) return;
-          setAvailability(availabilityMap(listed));
+      void fetchGatewayStatus(gatewayUrl, token)
+        .then((info) => {
+          if (cancelled) return;
+          setGatewayVersion(info.version);
+          if (info.providers.length === 0) return;
+          setAvailability(availabilityMap(info.providers));
           if (providerTouched.current) return;
-          setProvider(preferredProvider(listed));
+          setProvider(preferredProvider(info.providers));
         })
         .catch(() => {});
     };
@@ -228,7 +322,7 @@ export function App({ config }: AppProps) {
       cancelled = true;
       off();
     };
-  }, [config.browserToken, config.gatewayUrl, workspace]);
+  }, [config.browserToken, gatewayUrl, workspace]);
 
   useLayoutEffect(() => {
     if (!pushSnapshot.current) pushSnapshot.current = snapshotDocumentPush();
@@ -246,6 +340,22 @@ export function App({ config }: AppProps) {
       if (pushSnapshot.current) restoreDocumentPush(document.documentElement, pushSnapshot.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const host = overlayHost();
+    if (host instanceof HTMLElement) applyHostTheme(host, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== 'system' || typeof matchMedia !== 'function') return;
+    const media = matchMedia('(prefers-color-scheme: light)');
+    const onChange = (): void => {
+      const host = overlayHost();
+      if (host instanceof HTMLElement) applyHostTheme(host, 'system');
+    };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [theme]);
 
   useLayoutEffect(() => {
     if (skipSideFocus.current) {
@@ -281,9 +391,86 @@ export function App({ config }: AppProps) {
     if (run instanceof HTMLElement) run.focus();
   }, [bottomOpen, bottomTab]);
 
+  useLayoutEffect(() => {
+    if (!pendingTestRun.current || !bottomOpen || bottomTab !== 'tests') return;
+    pendingTestRun.current = false;
+    const button = shellRef.current?.querySelector('[data-action="run-tests"]');
+    if (button instanceof HTMLElement) button.click();
+  }, [bottomOpen, bottomTab]);
+
+  useLayoutEffect(() => {
+    const loc = selectedLocRef.current;
+    if (!loc || selected) return;
+    try {
+      const element = document.querySelector(locSelector(loc));
+      if (!(element instanceof Element)) return;
+      elementRef.current = element;
+      setSelected(locateElement(element));
+    } catch {
+      selectedLocRef.current = null;
+    }
+  }, [selected]);
+
+  useEffect(() => {
+    savePrefs({
+      theme,
+      dockMode,
+      provider,
+      autoAttach,
+      pillCorner,
+      sideWidth,
+      bottomHeight,
+    });
+  }, [theme, dockMode, provider, autoAttach, pillCorner, sideWidth, bottomHeight]);
+
+  useEffect(() => {
+    saveSession(projectKey, {
+      sideOpen,
+      sideTab,
+      bottomOpen,
+      bottomTab,
+      prompt,
+      threadId,
+      selectedLoc: selectedLocRef.current,
+    });
+  }, [projectKey, sideOpen, sideTab, bottomOpen, bottomTab, prompt, threadId, selected]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
+      if (hiddenRef.current) return;
+      const host = overlayHost();
+      if (isPaletteChord(event)) {
+        if (!eventInsideOverlay(event, host) && isEditableTarget(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (settingsOpenRef.current) setSettingsOpen(false);
+        setPaletteOpen((value) => !value);
+        return;
+      }
+      if (isInspectChord(event)) {
+        event.preventDefault();
+        setInspecting((value) => !value);
+        return;
+      }
+      if (isStopChord(event)) {
+        if (!sendingRef.current) return;
+        event.preventDefault();
+        stopRun.current?.();
+        return;
+      }
       if (event.key !== 'Escape') return;
+      if (paletteOpenRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setPaletteOpen(false);
+        return;
+      }
+      if (settingsOpenRef.current) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setSettingsOpen(false);
+        return;
+      }
       if (inspectingRef.current) return;
       if (bottomOpenRef.current) {
         event.preventDefault();
@@ -310,12 +497,11 @@ export function App({ config }: AppProps) {
       closeSide();
       return;
     }
-    if (!sideOpen) setSideWidth(defaultSideWidth(tab, viewport.width));
-    else if (tab === 'diffs') setSideWidth((current) => Math.max(current, reviewDefaultWidth(viewport.width)));
+    if (tab === 'diffs') setSideWidth((current) => Math.max(current, reviewDefaultWidth(viewport.width)));
     setSideTab(tab);
     setSideOpen(true);
     if (tab === 'chat') setChatUnread(false);
-    if (tab === 'diffs') setNotice(null);
+    if (tab === 'diffs') dismissToastsMatching('Edited');
   }
 
   function closeSide(): void {
@@ -332,7 +518,7 @@ export function App({ config }: AppProps) {
       queueMicrotask(() => focusAction(tab));
       return;
     }
-    if (!bottomOpen) setBottomHeight(clampBottomHeight(BOTTOM_DEFAULT, viewport.height));
+    setBottomHeight((current) => clampBottomHeight(current, viewport.height));
     setBottomTab(tab);
     setBottomOpen(true);
   }
@@ -342,6 +528,73 @@ export function App({ config }: AppProps) {
     if (disposeTerminal) setTerminalMounted(false);
     setBottomOpen(false);
     queueMicrotask(() => focusAction(action));
+  }
+
+  function openSettings(): void {
+    setPaletteOpen(false);
+    setSettingsOpen(true);
+  }
+
+  function hideToolbar(): void {
+    setPaletteOpen(false);
+    setSettingsOpen(false);
+    setInspecting(false);
+    setSideOpen(false);
+    setBottomOpen(false);
+    setHidden(true);
+  }
+
+  function newChat(): void {
+    setMessages([]);
+    setPrompt('');
+    setThreadId(null);
+    setChatUnread(false);
+    setSideTab('chat');
+    setSideOpen(true);
+  }
+
+  function executePalette(id: string): void {
+    setPaletteOpen(false);
+    if (id === 'inspect') {
+      setInspecting((value) => !value);
+      return;
+    }
+    if (id === 'new-chat') {
+      newChat();
+      return;
+    }
+    if (id === 'review') {
+      openSide('diffs', true);
+      return;
+    }
+    if (id === 'run-tests') {
+      pendingTestRun.current = true;
+      openBottom('tests', true);
+      return;
+    }
+    if (id === 'terminal') {
+      openBottom('terminal', true);
+      return;
+    }
+    if (id === 'toggle-theme') {
+      applyTheme(theme === 'light' ? 'dark' : 'light');
+      return;
+    }
+    if (id === 'settings') {
+      openSettings();
+      return;
+    }
+    if (id === 'hide') {
+      hideToolbar();
+      return;
+    }
+    if (id.startsWith('provider:')) {
+      const next = id.slice('provider:'.length);
+      if (next === 'cursor' || next === 'claude' || next === 'codex' || next === 'antigravity') {
+        providerTouched.current = true;
+        setProvider(next);
+      }
+    }
   }
 
   function pushStatus(text: string): void {
@@ -359,6 +612,7 @@ export function App({ config }: AppProps) {
     const requestId = createId();
     let assistantText = '';
     let sawEdit = false;
+    let editedCount = 0;
     let stopped = false;
     let settled = false;
     let runId: string | undefined;
@@ -388,10 +642,27 @@ export function App({ config }: AppProps) {
       else if (failure) writeAssistant(assistantText ? `${assistantText}\n${failure}` : failure, true);
       else writeAssistant(assistantText || 'The agent finished without text output.');
       if (!(sideOpenRef.current && sideTabRef.current === 'chat')) setChatUnread(true);
-      if (!stopped && !failure && sawEdit) {
+      if (failure) {
+        pushToast({ text: failure, tone: 'error' });
+      } else if (!stopped && sawEdit && !(sideOpenRef.current && sideTabRef.current === 'diffs')) {
         void refreshDiffs().then((count) => {
-          if (count > 0) setNotice(REVIEW_NOTICE);
+          const files = count || editedCount || 1;
+          pushToast({
+            text: `Edited ${files} file${files === 1 ? '' : 's'}`,
+            actions: [
+              {
+                label: 'Review',
+                action: 'review-diffs',
+                onClick: () => {
+                  dismissToastsMatching('Edited');
+                  openSide('diffs', true);
+                },
+              },
+            ],
+          });
         });
+      } else if (!stopped && sawEdit) {
+        void refreshDiffs();
       }
       setSending(false);
     };
@@ -407,7 +678,10 @@ export function App({ config }: AppProps) {
         const path = toolPath(event.payload.toolArgs) ?? event.payload.filePath;
         pushStatus(activityLabel(event.payload.toolName, path));
       }
-      if (event.type === 'file_edit') sawEdit = true;
+      if (event.type === 'file_edit') {
+        sawEdit = true;
+        editedCount += 1;
+      }
       if (event.type === 'error') {
         const messageText = event.payload.error ?? 'The agent reported an error';
         writeAssistant(assistantText ? `${assistantText}\n${messageText}` : messageText, true);
@@ -450,11 +724,16 @@ export function App({ config }: AppProps) {
     try {
       const live = elementRef.current;
       const selectedElement = live?.isConnected ? locateElement(live) : selected ?? undefined;
-      const context = await gatherContext(selectedElement, live);
+      const context = await gatherContext(selectedElement, live, {
+        screenshot: autoAttach.screenshot,
+        consoleErrors: autoAttach.consoleErrors,
+        failedRequests: autoAttach.failedRequests,
+      });
       if (settled) return;
       const accepted = await workspace.request({
         type: 'run.start',
         requestId,
+        ...(threadId ? { threadId } : {}),
         provider,
         mode: 'agent',
         prompt: text,
@@ -462,12 +741,15 @@ export function App({ config }: AppProps) {
         attachments: [],
       });
       runId = accepted.runId;
+      if (accepted.threadId) setThreadId(accepted.threadId);
       if (stopped) workspace.send({ type: 'run.cancel', runId: accepted.runId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Prompt failed';
       finish(message);
     }
   }
+
+  if (hidden) return <div className="dock" ref={shellRef} hidden />;
 
   return (
     <div className="dock" ref={shellRef}>
@@ -476,31 +758,12 @@ export function App({ config }: AppProps) {
           Click an element to attach it. Press Esc to cancel.
         </div>
       ) : null}
-      {notice ? (
-        <div className="notice" data-corner={pillCorner} role="status" style={toastStyle(pillCorner, offset)}>
-          <span>{notice}</span>
-          <button
-            type="button"
-            data-action="review-diffs"
-            onClick={() => {
-              setNotice(null);
-              openSide('diffs');
-            }}
-          >
-            Review diffs
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            data-action="dismiss-notice"
-            aria-label="Dismiss notice"
-            title="Dismiss notice"
-            onClick={() => setNotice(null)}
-          >
-            <XIcon />
-          </button>
-        </div>
-      ) : null}
+      <ToastStack
+        toasts={toasts}
+        corner={pillCorner}
+        offset={offset}
+        onDismiss={(id) => setToasts((current) => current.filter((item) => item.id !== id))}
+      />
       <LauncherPill
         inspecting={inspecting}
         sideOpen={sideOpen}
@@ -526,11 +789,11 @@ export function App({ config }: AppProps) {
           open={sideOpen}
           sheet={sheet}
           width={sideWidth}
-          bottomOffset={bottomOpen && !sheet ? bottomHeight : 0}
           tab={sideTab}
           onTab={(next) => openSide(next, true)}
           onResize={(width) => setSideWidth(clampSideWidth(width))}
           onClose={closeSide}
+          onSettings={openSettings}
         >
           {sideTab === 'chat' ? (
             <ChatDrawer
@@ -548,6 +811,7 @@ export function App({ config }: AppProps) {
               }}
               onClearSelection={() => {
                 elementRef.current = null;
+                selectedLocRef.current = null;
                 setSelected(null);
               }}
               onSuggest={setPrompt}
@@ -581,39 +845,54 @@ export function App({ config }: AppProps) {
           ) : null}
         </BottomDock>
       ) : null}
+      {paletteOpen ? (
+        <CommandPalette items={paletteItems} onExecute={executePalette} onClose={() => setPaletteOpen(false)} />
+      ) : null}
+      {settingsOpen ? (
+        <SettingsModal
+          theme={theme}
+          dockMode={dockMode}
+          provider={provider}
+          autoAttach={autoAttach}
+          availability={availability}
+          gatewayUrl={gatewayUrl}
+          connectionState={connectionState}
+          gatewayVersion={gatewayVersion}
+          onTheme={applyTheme}
+          onDockMode={setDockMode}
+          onProvider={(next) => {
+            providerTouched.current = true;
+            setProvider(next);
+          }}
+          onAutoAttach={setAutoAttach}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function toastStyle(
-  corner: PillCorner,
-  offset: { inline: number; block: number },
-): Record<string, string> {
-  const edge = `${offset.block + PILL_HEIGHT + 8}px`;
-  const inset = `${offset.inline}px`;
-  if (corner === 'bottom-right') return { right: inset, bottom: edge, left: 'auto', top: 'auto' };
-  if (corner === 'bottom-left') return { left: inset, bottom: edge, right: 'auto', top: 'auto' };
-  if (corner === 'top-right') return { right: inset, top: edge, left: 'auto', bottom: 'auto' };
-  return { left: inset, top: edge, right: 'auto', bottom: 'auto' };
-}
-
-async function fetchProviderAvailability(gatewayUrl: string, token: string): Promise<ProviderStatus[]> {
+async function fetchGatewayStatus(
+  gatewayUrl: string,
+  token: string,
+): Promise<{ providers: ProviderStatus[]; version: string | null }> {
   const response = await fetch(new URL('/api/v1/status', gatewayUrl), {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!response.ok) return [];
+  if (!response.ok) return { providers: [], version: null };
   const body: unknown = await response.json();
-  if (!body || typeof body !== 'object' || !('providers' in body)) return [];
-  const providers = (body as { providers?: unknown }).providers;
-  if (!Array.isArray(providers)) return [];
+  if (!body || typeof body !== 'object') return { providers: [], version: null };
+  const record = body as { providers?: unknown; version?: unknown };
+  const version = typeof record.version === 'string' ? record.version : null;
+  if (!Array.isArray(record.providers)) return { providers: [], version };
   const statuses: ProviderStatus[] = [];
-  for (const item of providers) {
+  for (const item of record.providers) {
     if (!item || typeof item !== 'object') continue;
-    const record = item as { provider?: unknown; available?: unknown };
-    if (!isProvider(record.provider)) continue;
-    statuses.push({ provider: record.provider, available: record.available === true });
+    const entry = item as { provider?: unknown; available?: unknown };
+    if (!isProvider(entry.provider)) continue;
+    statuses.push({ provider: entry.provider, available: entry.available === true });
   }
-  return statuses;
+  return { providers: statuses, version };
 }
 
 function isProvider(value: unknown): value is ProviderType {

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { XIcon } from './icons.js';
 
 export interface DockTab<Id extends string> {
@@ -13,6 +14,7 @@ export interface DockHeaderProps<Id extends string> {
   closeLabel: string;
   onClose: () => void;
   sheet?: boolean;
+  extra?: ComponentChildren;
 }
 
 export function DockHeader<Id extends string>({
@@ -23,6 +25,7 @@ export function DockHeader<Id extends string>({
   closeLabel,
   onClose,
   sheet = false,
+  extra,
 }: DockHeaderProps<Id>) {
   return (
     <header className="dock-header">
@@ -41,6 +44,7 @@ export function DockHeader<Id extends string>({
             </button>
           ))}
         </div>
+        {extra}
         <button
           type="button"
           className="icon-button"

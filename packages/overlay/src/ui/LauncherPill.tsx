@@ -67,8 +67,10 @@ export function LauncherPill({
   const style = drag
     ? { left: `${drag.left}px`, top: `${drag.top}px`, right: 'auto', bottom: 'auto' }
     : {
-        [corner.endsWith('right') ? 'right' : 'left']: `${insetInline}px`,
-        [corner.startsWith('top') ? 'top' : 'bottom']: `${insetBlock}px`,
+        left: corner.endsWith('right') ? 'auto' : `${insetInline}px`,
+        right: corner.endsWith('right') ? `${insetInline}px` : 'auto',
+        top: corner.startsWith('top') ? `${insetBlock}px` : 'auto',
+        bottom: corner.startsWith('top') ? 'auto' : `${insetBlock}px`,
       };
 
   return (

@@ -40,6 +40,7 @@ export default defineConfig(({ mode }) => {
       environment: 'happy-dom',
       include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],
       restoreMocks: true,
+      setupFiles: ['test/setup.ts'],
       testTimeout: 10_000,
     },
     build: {

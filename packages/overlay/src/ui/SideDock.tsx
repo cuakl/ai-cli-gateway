@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { DockHeader } from './DockHeader.js';
+import { SettingsIcon } from './icons.js';
 import {
   SIDE_MAX,
   SIDE_MIN,
@@ -12,11 +13,11 @@ export interface SideDockProps {
   open: boolean;
   sheet: boolean;
   width: number;
-  bottomOffset: number;
   tab: SideTab;
   onTab: (tab: SideTab) => void;
   onResize: (width: number) => void;
   onClose: () => void;
+  onSettings: () => void;
   children: ComponentChildren;
 }
 
@@ -29,27 +30,20 @@ export function SideDock({
   open,
   sheet,
   width,
-  bottomOffset,
   tab,
   onTab,
   onResize,
   onClose,
+  onSettings,
   children,
 }: SideDockProps) {
   const closeAction = tab === 'chat' ? 'close-chat' : 'close-diffs';
   const closeLabel = tab === 'chat' ? 'Close chat' : 'Close review';
   return (
     <aside
-      className={`side-dock${sheet ? ' sheet' : ''}${!sheet && bottomOffset > 0 ? ' with-bottom' : ''}`}
+      className={`side-dock${sheet ? ' sheet' : ''}`}
       hidden={!open}
-      style={
-        sheet
-          ? undefined
-          : {
-              width: `${width}px`,
-              bottom: bottomOffset > 0 ? `${bottomOffset}px` : '0',
-            }
-      }
+      style={sheet ? undefined : { width: `${width}px` }}
     >
       {sheet ? null : (
         <ResizeHandle
@@ -69,6 +63,18 @@ export function SideDock({
         closeLabel={closeLabel}
         onClose={onClose}
         sheet={sheet}
+        extra={
+          <button
+            type="button"
+            className="icon-button"
+            data-action="settings"
+            aria-label="Settings"
+            title="Settings"
+            onClick={onSettings}
+          >
+            <SettingsIcon />
+          </button>
+        }
       />
       <div className="dock-body">{children}</div>
     </aside>

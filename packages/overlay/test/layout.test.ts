@@ -209,10 +209,10 @@ describe('overlay docks', () => {
     textarea.value = 'Make it emerald';
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(shadow?.textContent).toContain('Review the diffs'));
+    await vi.waitFor(() => expect(shadow?.textContent).toContain('Edited 1 file'));
 
     workspace.emit({ type: 'git.changed', summary: { files: [], insertions: 0, deletions: 0 } });
-    await vi.waitFor(() => expect(shadow?.textContent).not.toContain('Review the diffs'));
+    await vi.waitFor(() => expect(shadow?.textContent).not.toContain('Edited 1 file'));
   });
 
   it('hides commit controls when the review list is empty', async () => {
