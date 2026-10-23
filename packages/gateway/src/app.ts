@@ -14,8 +14,12 @@ import { registerProjectRoutes } from './routes/projects.js';
 import { registerPromptRoutes } from './routes/prompt.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerStatusRoutes } from './routes/status.js';
+import { registerThreadRoutes } from './routes/threads.js';
 import { createDefaultRuntime, type GatewayRuntime } from './runtime.js';
 import { SessionRegistry } from './sessions/registry.js';
+import { ActiveRuns } from './threads/active.js';
+import { startRetention } from './threads/retention.js';
+import { FileThreadStore } from './threads/store.js';
 import type { ServerDeps } from './types.js';
 import { registerWebSocketRoutes } from './ws/handler.js';
 import { registerWorkspaceRoutes } from './ws/workspace.js';
@@ -60,9 +64,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     home,
     projects,
     auth: new AuthService(ensured.token, projects),
+    threads: new FileThreadStore(home),
+    runs: new ActiveRuns(),
     bindHost: options.host ?? '127.0.0.1',
     ...(options.root ? { root: options.root } : {}),
   };
+  const stopRetention = await startRetention(deps);
 
   const app = Fastify({
     logger: options.logger ?? false,
@@ -71,6 +78,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   app.addHook('onClose', async () => {
+    stopRetention();
     deps.registry.dispose();
   });
   app.addHook('onListen', async () => {
@@ -124,6 +132,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerProjectRoutes(app, deps);
   registerPromptRoutes(app, deps);
   registerSessionRoutes(app, deps);
+  registerThreadRoutes(app, deps);
   registerWebSocketRoutes(app, deps);
   registerWorkspaceRoutes(app, deps);
 

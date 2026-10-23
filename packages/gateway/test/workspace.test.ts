@@ -115,7 +115,7 @@ describe('workspace WebSocket', () => {
     }
   });
 
-  it('replies not_implemented for thread commands and validation_error for a bad message', async () => {
+  it('lists threads and rejects an invalid message', async () => {
     const root = await tempDir('ws-nyi-');
     const server = await startProject(
       root,
@@ -126,11 +126,21 @@ describe('workspace WebSocket', () => {
     const messages = collect(socket);
     try {
       socket.send(JSON.stringify({ type: 'thread.list', requestId: 't1' }));
+      socket.send(JSON.stringify({ type: 'git.checkpoint.restore', requestId: 't2', runId: 'run_abc' }));
       socket.send(JSON.stringify({ type: 'nope', requestId: 'bad' }));
-      const replies = () => messages.items.filter((item) => item.type === 'error');
-      await messages.waitFor(() => replies().length >= 2);
-      expect(replies()[0]).toMatchObject({ type: 'error', requestId: 't1', code: 'not_implemented' });
-      expect(replies()[1]).toMatchObject({ type: 'error', requestId: 'bad', code: 'validation_error' });
+      await messages.waitFor((items) => items.filter((item) => item.requestId === 't1' || item.requestId === 't2' || item.requestId === 'bad').length >= 3);
+      expect(messages.items.find((item) => item.requestId === 't1')).toMatchObject({
+        type: 'thread.list.result',
+        threads: [],
+      });
+      expect(messages.items.find((item) => item.requestId === 't2')).toMatchObject({
+        type: 'error',
+        code: 'not_implemented',
+      });
+      expect(messages.items.find((item) => item.requestId === 'bad')).toMatchObject({
+        type: 'error',
+        code: 'validation_error',
+      });
     } finally {
       await closeSocket(socket);
     }

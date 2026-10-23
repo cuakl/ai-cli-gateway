@@ -7,6 +7,7 @@ import {
   ImageAttachmentSchema,
   RunIdSchema,
   RunSchema,
+  ThreadEventSchema,
   ThreadIdSchema,
   ThreadSchema,
 } from './threads.js';
@@ -181,6 +182,7 @@ export const WorkspaceServerMessageSchema = z.discriminatedUnion('type', [
   withType('thread.get.result', {
     thread: ThreadSchema,
     runs: z.array(RunSchema),
+    events: z.array(ThreadEventSchema),
   }),
   withType('thread.delete.result', {
     threadId: ThreadIdSchema,

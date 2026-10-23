@@ -16,7 +16,9 @@ export function registerSessionRoutes(app: FastifyInstance, deps: ServerDeps): v
   app.post('/api/v1/sessions', async (request, reply) => {
     try {
       const body = readPromptRequest(request.body);
-      const { sessionId } = await startExecution(deps, body, undefined, requirePrincipal(request));
+      const { sessionId } = await startExecution(deps, body, undefined, requirePrincipal(request), {
+        recordApi: true,
+      });
       return reply.code(201).send({
         sessionId,
         status: 'running' as const,

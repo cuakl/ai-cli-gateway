@@ -82,6 +82,7 @@ export {
   RunStatusSchema,
   RunUsageSchema,
   SelectionDescriptorSchema,
+  ThreadEventSchema,
   ThreadIdSchema,
   ThreadSchema,
   ThreadSourceSchema,
@@ -96,6 +97,7 @@ export type {
   RunUsage,
   SelectionDescriptor,
   Thread,
+  ThreadEvent,
   ThreadSource,
 } from './threads.js';
 

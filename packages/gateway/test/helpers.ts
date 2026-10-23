@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { UnifiedStreamEvent } from '@aidev/protocol';
+import type { ThreadEvent, UnifiedStreamEvent } from '@aidev/protocol';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type BuildServerOptions } from '../src/app.js';
 import { readMachineToken } from '../src/home.js';
@@ -153,6 +153,64 @@ export async function collectSse(
 }
 
 function parseSseBlock(block: string): UnifiedStreamEvent {
+  const { eventName, data } = readSseBlock(block);
+  const event = data as UnifiedStreamEvent;
+  if (event.type !== eventName) {
+    throw new Error(`SSE event "${eventName}" does not match payload type "${event.type}"`);
+  }
+  return event;
+}
+
+/** Read thread event SSE. `data` is `{ runId, event }`. */
+export async function collectThreadSse(
+  response: Response,
+  onEvent?: (record: ThreadEvent) => void,
+): Promise<ThreadEvent[]> {
+  if (!response.body) throw new Error('expected an SSE body');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const events: ThreadEvent[] = [];
+  let buffer = '';
+
+  const consume = (): void => {
+    const blocks = buffer.split('\n\n');
+    buffer = blocks.pop() ?? '';
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+      const record = parseThreadSseBlock(block);
+      events.push(record);
+      onEvent?.(record);
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      consume();
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      buffer += '\n\n';
+      consume();
+    }
+  } catch {
+    // The server closed the socket or the caller aborted the request.
+  }
+  return events;
+}
+
+function parseThreadSseBlock(block: string): ThreadEvent {
+  const { eventName, data } = readSseBlock(block);
+  const record = data as ThreadEvent;
+  if (!record.event || record.event.type !== eventName) {
+    throw new Error(`SSE event "${eventName}" does not match thread payload`);
+  }
+  return record;
+}
+
+function readSseBlock(block: string): { eventName: string; data: unknown } {
   let eventName = 'message';
   const dataLines: string[] = [];
   for (const line of block.split('\n')) {
@@ -163,9 +221,5 @@ function parseSseBlock(block: string): UnifiedStreamEvent {
   if (dataLines.length === 0) {
     throw new Error(`SSE block is missing data: ${block}`);
   }
-  const data = JSON.parse(dataLines.join('\n')) as UnifiedStreamEvent;
-  if (data.type !== eventName) {
-    throw new Error(`SSE event "${eventName}" does not match payload type "${data.type}"`);
-  }
-  return data;
+  return { eventName, data: JSON.parse(dataLines.join('\n')) as unknown };
 }

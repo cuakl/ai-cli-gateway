@@ -13,12 +13,15 @@ import {
   createStreamEvent,
   type PromptOptions,
   type PromptRequest,
+  type Run,
   type SessionStatus,
   type UnifiedStreamEvent,
 } from '@aidev/protocol';
 import type { Principal } from './auth/principal.js';
 import { HttpError } from './errors.js';
 import type { SessionRegistry } from './sessions/registry.js';
+import { projectForPath, runFromOutcome, runningRun, threadTitle, type ThreadRunBinding } from './threads/run.js';
+import type { ThreadPatch } from './threads/store.js';
 import type { ServerDeps } from './types.js';
 
 export interface ExecutionOutcome {
@@ -28,6 +31,20 @@ export interface ExecutionOutcome {
   events: UnifiedStreamEvent[];
   status: SessionStatus;
   error?: unknown;
+  /** Set when this execution is stored as a thread run. */
+  run?: Run;
+}
+
+export interface StartExecutionOptions {
+  /** Persist events onto this run. The caller created the thread and the run. */
+  binding?: ThreadRunBinding;
+  /** Create a one-run `api` thread. Ignored when `binding` is set. */
+  recordApi?: boolean;
+  /**
+   * Events written to the thread log before the adapter's own events.
+   * They are not copied into the session buffer.
+   */
+  prelude?: UnifiedStreamEvent[];
 }
 
 export interface StartedExecution {
@@ -45,20 +62,68 @@ export async function startExecution(
   request: PromptRequest,
   sessionId: string = request.sessionId ?? `sess_${randomUUID()}`,
   principal?: Principal,
+  options: StartExecutionOptions = {},
 ): Promise<StartedExecution> {
   if (!principal) throw new HttpError(401, 'unauthorized', 'A bearer token is required');
   const prompt = await confineRequest(deps, request, principal);
   const adapter = await prepareAdapter(deps, prompt, sessionId);
-  deps.registry.create({
-    id: sessionId,
-    provider: prompt.provider,
-    cwd: prompt.cwd,
-    adapter,
-    ...(prompt.ephemeral !== undefined ? { ephemeral: prompt.ephemeral } : {}),
-  });
+  const binding = options.binding ?? (options.recordApi ? await createApiBinding(deps, prompt) : undefined);
+  try {
+    deps.registry.create({
+      id: sessionId,
+      provider: prompt.provider,
+      cwd: prompt.cwd,
+      adapter,
+      ...(prompt.ephemeral !== undefined ? { ephemeral: prompt.ephemeral } : {}),
+    });
+  } catch (error) {
+    if (binding && !options.binding) await abortThreadRun(deps, binding, error);
+    throw error;
+  }
   logger.info(`session ${sessionId} started (${prompt.provider})`);
-  const done = executeSession(deps.registry, adapter, prompt, sessionId);
+  let settle = (): void => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  if (binding) {
+    deps.runs.add({
+      runId: binding.runId,
+      threadId: binding.threadId,
+      sessionId,
+      settled,
+    });
+  }
+  const execution = executeSession(deps, adapter, prompt, sessionId, binding, options.prelude);
+  const done = binding
+    ? execution.finally(() => {
+        deps.runs.remove(binding.runId);
+        settle();
+      })
+    : execution;
   return { sessionId, done };
+}
+
+/**
+ * Mark a run failed when the CLI never started.
+ * Callers that created the binding use this; `recordApi` failures are handled inside `startExecution`.
+ */
+export async function abortThreadRun(deps: ServerDeps, binding: ThreadRunBinding, error: unknown): Promise<void> {
+  const http = executionHttpError(error);
+  const setup = Array.isArray(http.details) && http.details.every((item) => typeof item === 'string') ? http.details : undefined;
+  const run = runFromOutcome(binding, { status: 'failed', exitCode: 1, events: [] });
+  const failed = {
+    ...run,
+    error: {
+      code: http.code,
+      message: http.message,
+      ...(setup ? { setup } : {}),
+    },
+  };
+  try {
+    await deps.threads.updateRun(binding.threadId, failed);
+  } catch (updateError) {
+    logger.error(updateError instanceof Error ? updateError.message : 'failed run was not saved');
+  }
 }
 
 /**
@@ -106,38 +171,66 @@ async function prepareAdapter(
 }
 
 async function executeSession(
-  registry: SessionRegistry,
+  deps: ServerDeps,
   adapter: CLIAdapter,
   request: PromptRequest,
   sessionId: string,
+  binding?: ThreadRunBinding,
+  prelude?: UnifiedStreamEvent[],
 ): Promise<ExecutionOutcome> {
+  const registry = deps.registry;
+  const persist = (event: UnifiedStreamEvent): void => {
+    if (!binding) return;
+    try {
+      // FileThreadStore writes before the promise is returned, so the JSONL
+      // line is on disk before `registry.append` notifies subscribers.
+      const written = deps.threads.appendEvent(binding.threadId, binding.runId, event);
+      if (event.type === 'session_info' && event.payload.providerSessionId) {
+        const patch: ThreadPatch = { providerSessionId: event.payload.providerSessionId };
+        if (event.payload.model) patch.model = event.payload.model;
+        deps.threads.updateThread(binding.threadId, patch);
+      }
+      void written.catch((error: unknown) => {
+        logger.error(error instanceof Error ? error.message : 'thread event was not stored');
+      });
+    } catch (error) {
+      logger.error(error instanceof Error ? error.message : 'thread event was not stored');
+    }
+  };
+  if (prelude) {
+    for (const event of prelude) persist(event);
+  }
+  const publish = (event: UnifiedStreamEvent): void => {
+    persist(event);
+    registry.append(sessionId, event);
+  };
   try {
-    const result = await adapter.execute(toPromptOptions(request, sessionId), (event) => {
-      registry.append(sessionId, event);
-    });
+    const result = await adapter.execute(toPromptOptions(request, sessionId), publish);
     const status: SessionStatus =
       registry.get(sessionId)?.status === 'killed'
         ? 'killed'
         : result.exitCode === 0
           ? 'completed'
           : 'failed';
-    ensureTerminalEvents(registry, sessionId);
+    ensureTerminalEvents(registry, sessionId, undefined, publish);
     const record = registry.finish(sessionId, { status, exitCode: result.exitCode });
     logger.info(`session ${sessionId} ${record?.status ?? status} (exit ${result.exitCode})`);
-    return {
+    const outcome: ExecutionOutcome = {
       sessionId,
       exitCode: result.exitCode,
       summary: result.summary,
       events: registry.events(sessionId) ?? [],
       status: record?.status ?? status,
     };
+    if (binding) outcome.run = await saveRun(deps, binding, outcome);
+    return outcome;
   } catch (error) {
     const status = statusForError(registry.get(sessionId)?.status, error);
-    ensureTerminalEvents(registry, sessionId, error);
+    ensureTerminalEvents(registry, sessionId, error, publish);
     const record = registry.finish(sessionId, { status, exitCode: 1 });
     const message = error instanceof Error ? error.message : 'Prompt execution failed';
     logger.error(`session ${sessionId} ${status}: ${message}`);
-    return {
+    const outcome: ExecutionOutcome = {
       sessionId,
       exitCode: 1,
       summary: '',
@@ -145,6 +238,8 @@ async function executeSession(
       status: record?.status ?? status,
       error,
     };
+    if (binding) outcome.run = await saveRun(deps, binding, outcome);
+    return outcome;
   }
 }
 
@@ -171,15 +266,62 @@ function statusForError(current: SessionStatus | undefined, error: unknown): Ses
   return 'failed';
 }
 
-function ensureTerminalEvents(registry: SessionRegistry, sessionId: string, error?: unknown): void {
+function ensureTerminalEvents(
+  registry: SessionRegistry,
+  sessionId: string,
+  error: unknown | undefined,
+  publish: (event: UnifiedStreamEvent) => void,
+): void {
   const current = registry.events(sessionId) ?? [];
   if (error !== undefined && !current.some((event) => event.type === 'error')) {
     const message = error instanceof Error ? error.message : 'Prompt execution failed';
-    registry.append(sessionId, createStreamEvent(sessionId, 'error', { error: message }));
+    publish(createStreamEvent(sessionId, 'error', { error: message }));
   }
   const afterError = registry.events(sessionId) ?? [];
   if (!afterError.some((event) => event.type === 'done')) {
-    registry.append(sessionId, createStreamEvent(sessionId, 'done', {}));
+    publish(createStreamEvent(sessionId, 'done', {}));
+  }
+}
+
+async function createApiBinding(deps: ServerDeps, request: PromptRequest): Promise<ThreadRunBinding> {
+  const project = projectForPath(deps.projects, request.cwd);
+  const thread = await deps.threads.createThread({
+    projectId: project?.id ?? null,
+    provider: request.provider,
+    model: request.model ?? null,
+    mode: request.mode ?? 'agent',
+    title: threadTitle(request.prompt),
+    keep: request.ephemeral !== true,
+    source: 'api',
+  });
+  const run = runningRun({
+    threadId: thread.id,
+    prompt: request.prompt,
+    contextSummary: null,
+    attachments: [],
+  });
+  await deps.threads.updateRun(thread.id, run);
+  return {
+    threadId: thread.id,
+    runId: run.id,
+    prompt: request.prompt,
+    startedAt: run.startedAt,
+    contextSummary: null,
+    attachments: [],
+  };
+}
+
+async function saveRun(
+  deps: ServerDeps,
+  binding: ThreadRunBinding,
+  outcome: ExecutionOutcome,
+): Promise<Run> {
+  const run = runFromOutcome(binding, outcome);
+  try {
+    return await deps.threads.updateRun(binding.threadId, run);
+  } catch (error) {
+    logger.error(error instanceof Error ? error.message : 'run record was not saved');
+    return run;
   }
 }
 

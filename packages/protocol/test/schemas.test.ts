@@ -13,6 +13,7 @@ import {
   ProviderSchema,
   RunModeSchema,
   RunSchema,
+  ThreadEventSchema,
   ThreadSchema,
   UnifiedStreamEventSchema,
   WorkspaceClientMessageSchema,
@@ -177,6 +178,12 @@ const samples: Sample[] = [
     schema: RunSchema,
     valid: run,
     invalid: { ...run, status: 'completed' },
+  },
+  {
+    name: 'ThreadEvent',
+    schema: ThreadEventSchema,
+    valid: { runId: 'run_abc', event: streamEvent },
+    invalid: { runId: 'sess_abc', event: streamEvent },
   },
   {
     name: 'project registration request',
@@ -582,8 +589,13 @@ const samples: Sample[] = [
     name: 'thread.get.result',
     schema: WorkspaceServerMessageSchema,
     wire: 'server',
-    valid: { type: 'thread.get.result', thread, runs: [run] },
-    invalid: { type: 'thread.get.result', thread },
+    valid: {
+      type: 'thread.get.result',
+      thread,
+      runs: [run],
+      events: [{ runId: 'run_abc', event: streamEvent }],
+    },
+    invalid: { type: 'thread.get.result', thread, runs: [run] },
   },
   {
     name: 'thread.delete.result',

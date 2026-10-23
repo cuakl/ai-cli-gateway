@@ -1,16 +1,13 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { PathEscapeError, confineToRoot, isInsideRoot, logger } from '@aidev/adapters';
 import {
-  RunSchema,
   WorkspaceClientMessageSchema,
   WorkspaceServerMessageSchema,
   createStreamEvent,
   type ContextSummary,
   type FrontendContextPayload,
-  type ImageAttachment,
-  type Run,
-  type SessionStatus,
+  type Thread,
   type UnifiedStreamEvent,
   type WorkspaceClientMessage,
   type WorkspaceServerMessage,
@@ -19,8 +16,13 @@ import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { ptyPermitted, requirePrincipal, type Principal } from '../auth/principal.js';
 import { HttpError } from '../errors.js';
-import { cancelSession, executionHttpError, startExecution, type ExecutionOutcome } from '../execute.js';
+import { abortThreadRun, cancelSession, executionHttpError, startExecution } from '../execute.js';
 import { composePrompt } from '../prompt-context.js';
+import { deleteThreadFully } from '../threads/control.js';
+import { providerSupportsResume } from '../threads/resume.js';
+import { runningRun, threadTitle, type ThreadRunBinding } from '../threads/run.js';
+import { ThreadStoreError } from '../threads/store.js';
+import { loadPreviousConversation } from '../threads/transcript.js';
 import type { ServerDeps } from '../types.js';
 import { commit, getDiff, gitLog, gitStatus, inspectWorkingTree, revert } from '../workspace/git-service.js';
 import { spawnPty, type PtySession } from '../workspace/pty-service.js';
@@ -29,10 +31,6 @@ import { runTests } from '../workspace/test-service.js';
 const WS_OPEN = 1;
 
 const NOT_IMPLEMENTED = new Set<WorkspaceClientMessage['type']>([
-  'thread.list',
-  'thread.get',
-  'thread.delete',
-  'thread.keep',
   'git.checkpoint.restore',
   'git.branch.create',
   'git.pr.create',
@@ -42,12 +40,7 @@ const NOT_IMPLEMENTED = new Set<WorkspaceClientMessage['type']>([
 interface TrackedRun {
   runId: string;
   sessionId: string;
-  threadId: string;
   projectId: string;
-  prompt: string;
-  startedAt: number;
-  contextSummary: ContextSummary | null;
-  attachments: ImageAttachment[];
 }
 
 interface LivePty {
@@ -56,8 +49,8 @@ interface LivePty {
 }
 
 /**
- * Multiplexed project socket: agent runs, git, PTY, and tests.
- * Threads, checkpoints, branches, and commit suggestions reply `not_implemented`.
+ * Multiplexed project socket: agent runs, threads, git, PTY, and tests.
+ * Checkpoints, branches, and commit suggestions reply `not_implemented`.
  */
 export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps): void {
   const hubs = new Map<string, Set<WebSocket>>();
@@ -178,6 +171,56 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         case 'run.cancel':
           await cancelRun(message);
           return;
+        case 'thread.list': {
+          const threads = await deps.threads.listThreads({ projectId });
+          reply({
+            type: 'thread.list.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            threads,
+          });
+          return;
+        }
+        case 'thread.get': {
+          const record = await deps.threads.getThread(message.threadId);
+          if (!record || record.thread.projectId !== projectId) {
+            throw new HttpError(404, 'not_found', `Thread ${message.threadId} was not found`);
+          }
+          const events = await deps.threads.readEvents(message.threadId);
+          reply({
+            type: 'thread.get.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            thread: record.thread,
+            runs: record.runs,
+            events,
+          });
+          return;
+        }
+        case 'thread.delete': {
+          const record = await deps.threads.getThread(message.threadId);
+          if (!record || record.thread.projectId !== projectId) {
+            throw new HttpError(404, 'not_found', `Thread ${message.threadId} was not found`);
+          }
+          await deleteThreadFully(deps, message.threadId);
+          reply({
+            type: 'thread.delete.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            threadId: message.threadId,
+          });
+          return;
+        }
+        case 'thread.keep': {
+          const record = await deps.threads.getThread(message.threadId);
+          if (!record || record.thread.projectId !== projectId) {
+            throw new HttpError(404, 'not_found', `Thread ${message.threadId} was not found`);
+          }
+          const thread = await deps.threads.updateThread(message.threadId, { keep: message.keep });
+          reply({
+            type: 'thread.keep.result',
+            ...(message.requestId ? { requestId: message.requestId } : {}),
+            thread,
+          });
+          return;
+        }
         case 'git.status': {
           const status = await gitStatus(project.root);
           reply({
@@ -279,10 +322,34 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         }
         warning = report.warning;
       }
-      const threadId = message.threadId ?? newId('thr');
-      const runId = newId('run');
+
+      const thread = await openThread(deps, projectId, message);
+      const runRecord = runningRun({
+        threadId: thread.id,
+        prompt: message.prompt,
+        contextSummary: summarizeContext(message.context),
+        attachments: message.attachments,
+      });
+      await deps.threads.updateRun(thread.id, runRecord);
+      const binding: ThreadRunBinding = {
+        threadId: thread.id,
+        runId: runRecord.id,
+        prompt: message.prompt,
+        startedAt: runRecord.startedAt,
+        contextSummary: runRecord.contextSummary,
+        attachments: runRecord.attachments,
+      };
       const sessionId = `sess_${randomUUID()}`;
-      const startedAt = Date.now();
+      const prelude = warning
+        ? [createStreamEvent(sessionId, 'chunk', { text: warning, segment: -1 })]
+        : undefined;
+      const resume = await resumeSessionId(deps, thread, message.provider);
+      let prompt = composePrompt(message.prompt, message.context);
+      if (!resume) {
+        const prior = await loadPreviousConversation(deps.threads, thread.id, runRecord.id);
+        if (prior) prompt = `${prior}\n\n${prompt}`;
+      }
+
       let started: Awaited<ReturnType<typeof startExecution>>;
       try {
         started = await startExecution(
@@ -290,14 +357,19 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
           {
             provider: message.provider,
             cwd: project.root,
-            prompt: composePrompt(message.prompt, message.context),
+            prompt,
             yolo: message.mode === 'agent',
             sessionId,
+            mode: message.mode,
+            ...(message.model ? { model: message.model } : {}),
+            ...(resume ? { providerSessionId: resume } : {}),
           },
           sessionId,
           principal,
+          { binding, ...(prelude ? { prelude } : {}) },
         );
       } catch (error) {
+        await abortThreadRun(deps, binding, error);
         const httpError = error instanceof HttpError ? error : executionHttpError(error);
         reply({
           type: 'error',
@@ -308,21 +380,12 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         return;
       }
 
-      const tracked: TrackedRun = {
-        runId,
-        sessionId,
-        threadId,
-        projectId,
-        prompt: message.prompt,
-        startedAt,
-        contextSummary: summarizeContext(message.context),
-        attachments: message.attachments,
-      };
-      runs.set(runId, tracked);
+      const runId = binding.runId;
+      runs.set(runId, { runId, sessionId, projectId });
       reply({
         type: 'run.accepted',
         ...(message.requestId ? { requestId: message.requestId } : {}),
-        threadId,
+        threadId: thread.id,
         runId,
       });
       activity(projectId);
@@ -341,8 +404,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
         if (live) sendEvent(event);
         else queued.push(event);
       });
-      if (warning) {
-        sendEvent(createStreamEvent(sessionId, 'chunk', { text: warning, segment: -1 }));
+      if (prelude) {
+        for (const event of prelude) sendEvent(event);
       }
       const buffered = (subscription?.events ?? []).concat(queued.splice(0, queued.length));
       live = true;
@@ -350,11 +413,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
 
       const outcome = await started.done;
       if (!live) return;
-      const run = buildRun(tracked, outcome);
+      if (!outcome.run) throw new HttpError(500, 'thread_store', 'Run record was not saved');
       reply({
         type: 'run.finished',
         ...(message.requestId ? { requestId: message.requestId } : {}),
-        run,
+        run: outcome.run,
       });
       runs.delete(runId);
       if (outcome.events.some((event) => event.type === 'file_edit')) {
@@ -461,48 +524,6 @@ export function registerWorkspaceRoutes(app: FastifyInstance, deps: ServerDeps):
   });
 }
 
-function buildRun(tracked: TrackedRun, outcome: ExecutionOutcome): Run {
-  const endedAt = Date.now();
-  const filesTouched = [
-    ...new Set(
-      outcome.events.flatMap((event) =>
-        event.type === 'file_edit' && event.payload.filePath ? [event.payload.filePath] : [],
-      ),
-    ),
-  ];
-  const status = runStatus(outcome.status, outcome.exitCode);
-  const errorEvent = [...outcome.events].reverse().find((event) => event.type === 'error');
-  const done = outcome.events.find((event) => event.type === 'done');
-  const durationMs = done?.payload.durationMs ?? Math.max(0, endedAt - tracked.startedAt);
-  return RunSchema.parse({
-    id: tracked.runId,
-    threadId: tracked.threadId,
-    prompt: tracked.prompt,
-    contextSummary: tracked.contextSummary,
-    attachments: tracked.attachments,
-    status,
-    startedAt: tracked.startedAt,
-    endedAt,
-    checkpoint: null,
-    filesTouched,
-    error:
-      status === 'succeeded' || !errorEvent?.payload.error
-        ? null
-        : {
-            code: outcome.status === 'timed_out' ? 'timeout' : 'agent_error',
-            message: errorEvent.payload.error,
-          },
-    usage: { durationMs },
-  });
-}
-
-function runStatus(status: SessionStatus, exitCode: number): Run['status'] {
-  if (status === 'killed') return 'cancelled';
-  if (status === 'timed_out') return 'timeout';
-  if (exitCode === 0 && (status === 'completed' || status === 'running')) return 'succeeded';
-  return 'failed';
-}
-
 function summarizeContext(context: FrontendContextPayload): ContextSummary {
   const selections: ContextSummary['selections'] = [];
   const selected = context.selectedElement;
@@ -526,12 +547,46 @@ function summarizeContext(context: FrontendContextPayload): ContextSummary {
   };
 }
 
-function newId(prefix: 'thr' | 'run'): string {
-  return `${prefix}_${randomBytes(12).toString('base64url')}`;
+async function openThread(
+  deps: ServerDeps,
+  projectId: string,
+  message: Extract<WorkspaceClientMessage, { type: 'run.start' }>,
+): Promise<Thread> {
+  if (message.threadId) {
+    const existing = await deps.threads.getThread(message.threadId);
+    if (existing) {
+      if (existing.thread.projectId !== projectId) {
+        throw new HttpError(404, 'not_found', `Thread ${message.threadId} was not found`);
+      }
+      const thread = existing.thread;
+      return deps.threads.updateThread(thread.id, {
+        provider: message.provider,
+        mode: message.mode,
+        ...(message.model ? { model: message.model } : {}),
+        ...(thread.provider !== message.provider ? { providerSessionId: null } : {}),
+      });
+    }
+  }
+  return deps.threads.createThread({
+    projectId,
+    provider: message.provider,
+    model: message.model ?? null,
+    mode: message.mode,
+    title: threadTitle(message.prompt),
+    keep: true,
+    source: 'overlay',
+  });
+}
+
+async function resumeSessionId(deps: ServerDeps, thread: Thread, provider: Thread['provider']): Promise<string | undefined> {
+  if (!thread.providerSessionId || thread.provider !== provider) return undefined;
+  if (!(await providerSupportsResume(deps, provider))) return undefined;
+  return thread.providerSessionId;
 }
 
 function asFailure(error: unknown): { code: string; message: string } {
   if (error instanceof HttpError) return { code: error.code, message: error.message };
+  if (error instanceof ThreadStoreError) return { code: 'thread_store', message: error.message };
   if (error instanceof PathEscapeError) return { code: 'path_escape', message: error.message };
   const message = error instanceof Error ? error.message : 'Request failed';
   if (/escapes the project root|invalid path/i.test(message)) return { code: 'path_escape', message };

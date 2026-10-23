@@ -9,7 +9,9 @@ export function registerPromptRoutes(app: FastifyInstance, deps: ServerDeps): vo
   app.post('/api/v1/prompt', async (request, reply) => {
     try {
       const body = readPromptRequest(request.body);
-      const { sessionId, done } = await startExecution(deps, body, undefined, requirePrincipal(request));
+      const { sessionId, done } = await startExecution(deps, body, undefined, requirePrincipal(request), {
+        recordApi: true,
+      });
       const outcome = await done;
       if (outcome.error) {
         const httpError = executionHttpError(outcome.error);

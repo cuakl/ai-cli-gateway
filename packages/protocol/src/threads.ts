@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ProviderSchema, RunModeSchema } from './capabilities.js';
+import { UnifiedStreamEventSchema } from './events.js';
 
 export const ThreadIdSchema = z.string().regex(/^thr_[A-Za-z0-9_-]+$/);
 
@@ -115,3 +116,11 @@ export const RunSchema = z.object({
 });
 
 export type Run = z.infer<typeof RunSchema>;
+
+/** One JSONL line: a unified event tagged with the run that produced it. */
+export const ThreadEventSchema = z.object({
+  runId: RunIdSchema,
+  event: UnifiedStreamEventSchema,
+});
+
+export type ThreadEvent = z.infer<typeof ThreadEventSchema>;

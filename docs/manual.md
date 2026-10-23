@@ -191,7 +191,27 @@ data: {"id":"...","sessionId":"sess_01H...","type":"done","timestamp":1760990001
 
 `GET /api/v1/sessions/:id` returns the session record: `id`, `provider`, `cwd`, `status`, `createdAt`, `updatedAt`, and `exitCode` once the run has finished. It does not include events. Events are the SSE stream at `GET /api/v1/sessions/:id/stream`. `DELETE /api/v1/sessions/:id` aborts a running session.
 
-`ephemeral: true` tells Claude Code to pass `--no-session-persistence`, so that run is not saved as a resumable chat. Cursor's `agent` CLI has no delete-chat command, so the same field does not remove a Cursor chat.
+`POST /api/v1/sessions` and `POST /api/v1/prompt` also create a one-run thread (`source: "api"`). The HTTP response shapes stay the same as above.
+
+`ephemeral: true` sets that thread's `keep` to `false` (eligible for retention) and is passed through to the adapter. Claude Code then gets `--no-session-persistence`, so the run is not saved as a resumable chat. Cursor's `agent` CLI has no delete-chat command, so the same field does not remove a Cursor chat.
+
+### Threads
+
+Each run is stored under `$AIDEV_HOME/threads/`: `<threadId>.json` holds the thread and its run metadata, and `<threadId>.jsonl` is the append-only event log. Overlay `run.start` reuses `threadId` when you send one, or creates a kept thread (`source: "overlay"`). Follow-ups resume Cursor and Claude with `providerSessionId` from `session_info`; other providers get the last six turns, capped at 8 KB, inside `<previous_conversation>`.
+
+```bash
+curl -s "http://127.0.0.1:4100/api/v1/threads?projectId=proj_…&source=api&limit=20" \
+  -H "authorization: Bearer $(cat ~/.aidev/token)"
+```
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/api/v1/threads?projectId=&source=&limit=` | `{ threads }` newest first. A browser token is limited to its project. |
+| `GET` | `/api/v1/threads/:id` | `{ thread, runs }` |
+| `DELETE` | `/api/v1/threads/:id` | Cancels an active run, then deletes both files. |
+| `GET` | `/api/v1/threads/:id/events?runId=` | SSE. Replays stored `{ runId, event }` lines, follows the live run when it is still active, then closes. |
+
+The project WebSocket has the same operations: `thread.list`, `thread.get` (includes `events`), `thread.delete`, and `thread.keep`. Threads with `keep: false` older than `retentionDays` (default 7, from `config.json`) are removed on startup and every hour. Overlay threads start with `keep: true`.
 
 ### WebSocket
 
