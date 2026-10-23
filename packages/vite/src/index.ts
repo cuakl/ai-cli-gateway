@@ -15,11 +15,14 @@ import { readMachineToken, registerProject, type RegisteredProject } from './reg
 import { createVueDataLocTransform, type VueNodeTransform } from './vue-transform.js';
 
 export { CLI_NAME, EVENT_PREFIX, GLOBAL_CONFIG_KEY, HOME_DIRNAME, PRODUCT_NAME, SCOPE };
-export { DEFAULT_GATEWAY_URL } from './companion.js';
+export { DEFAULT_GATEWAY_URL, ensureGateway, gatewayStartHint, resolveGatewayBin } from './companion.js';
+export type { EnsureGatewayOptions } from './companion.js';
 export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 export { EARLY_ERROR_SCRIPT } from './early-errors.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
+export { readMachineToken, registerProject } from './register-project.js';
+export type { RegisteredProject } from './register-project.js';
 export { aidevSveltePreprocess } from './svelte-preprocess.js';
 export type { AidevMarkupPreprocessor, AidevSveltePreprocessOptions } from './svelte-preprocess.js';
 export { createVueDataLocTransform } from './vue-transform.js';

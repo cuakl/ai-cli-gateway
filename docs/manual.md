@@ -107,7 +107,7 @@ Starting another run aborts the one in progress.
 
 ## Add the overlay to a Vite app
 
-From the app directory, `aidev init` detects the package manager (lockfile) and the framework. For Vite it prints the install command and, when `vite.config.(ts|js|mjs)` has a `plugins: [` array, inserts the plugin. It never runs the install. `--dry-run` prints the diff and leaves the file unchanged.
+From the app directory, `aidev init` detects the package manager (lockfile) and the framework. For Vite it prints the install command and, when `vite.config.(ts|js|mjs)` has a `plugins: [` array, inserts the plugin. For Next.js it prints `add -D @aidev/next` and, when `next.config.(js|mjs|ts)` is a plain `export default {…}` or `module.exports = {…}`, wraps that object with `withAidev`. It never runs the install. `--dry-run` prints the diff and leaves the file unchanged.
 
 ```bash
 cd my-app
@@ -127,9 +127,62 @@ export default defineConfig({
 });
 ```
 
-If the config has no `plugins: [` array, or the app is Next.js / not Vite, `aidev init` prints the snippet instead of editing.
+If the Vite config has no `plugins: [` array, `aidev init` prints the wrap instead of editing.
 
-### Script tag (Next.js and other non-Vite apps)
+### Next.js (`@aidev/next`)
+
+```bash
+cd my-app
+npx aidev init
+pnpm add -D @aidev/next   # or npm/yarn/bun, as printed
+```
+
+Wrap the config (this is also the edit `aidev init` applies to a plain object export):
+
+```ts
+import { withAidev } from '@aidev/next';
+
+const nextConfig = {
+  // existing options
+};
+
+export default withAidev(nextConfig);
+```
+
+`withAidev` is a no-op when `NODE_ENV === 'production'`. In development it auto-starts the gateway the same way `@aidev/vite` does, registers the app origin (default `http://localhost:3000`, override with `{ origin }`), and exposes `NEXT_PUBLIC_AIDEV_GATEWAY_URL`, `NEXT_PUBLIC_AIDEV_PROJECT_ID`, `NEXT_PUBLIC_AIDEV_BROWSER_TOKEN`, and `NEXT_PUBLIC_AIDEV_PROJECT_NAME`. Next.js 12.1+ awaits a Promise default export, so `export default withAidev(nextConfig)` is valid.
+
+Add `<AidevScript />` to the App Router root layout. It is a Server Component (no hooks) and renders nothing in production. In development it writes `window.__AI_DEVTOOLS__` (with `<` escaped in the JSON) and loads `GET /overlay.js` from the gateway:
+
+```tsx
+import { AidevScript } from '@aidev/next/script';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        {children}
+        <AidevScript />
+      </body>
+    </html>
+  );
+}
+```
+
+If `next.config` is a function, `export default nextConfig`, or already wrapped, `aidev init` prints these instructions instead of editing.
+
+#### data-loc: webpack vs Turbopack
+
+This workspace's `@aidev/next` types and tests depend on **Next 16.4**. The stamper is the existing Babel JSX transform from `@aidev/vite`, run as a webpack loader (`@aidev/next/loader`) on user `.jsx`/`.tsx` (not `node_modules`).
+
+| Bundler | What `withAidev` does | What works |
+| --- | --- | --- |
+| **Webpack** (`next dev --webpack`, Next 14, Next 15 without Turbopack) | `webpack(config, { dev, isServer })` adds an `enforce: 'pre'` loader in development | Reliable. The loader rewrites TSX in place, then SWC compiles it. |
+| **Turbopack** (default in Next 16; `next dev --turbopack` in 15) | Sets `turbopack.rules` for `*.jsx` / `*.tsx` (Next ≥ 15.3). Also sets `experimental.turbo.rules` on Next 13–15, where that was the old name; Next 16 removed `experimental.turbo`. | Next documents webpack loaders under Turbopack, with the caveat that the loader bridge is built for loaders that return **JavaScript**. This loader is a TSX→TSX stamp (`as: '*.tsx'` / `'*.jsx'`). If a given Next version does not apply it, use `next dev --webpack`. |
+| **SWC plugin** | Not implemented | Future option if Turbopack loaders are not viable for this transform. Do not add a `babel.config` just to get data-loc — that disables SWC for webpack. |
+
+create-next-app's default `const nextConfig = { … }; export default nextConfig` is **not** a simple object export, so `aidev init` will not rewrite it; wrap it with `withAidev` as shown above.
+
+### Script tag (other non-Vite apps)
 
 `--origin` is required. It must be `http` or `https` on localhost, `127.0.0.1`, or a private LAN address. That origin is added to the project's CORS allowlist. The command registers the directory (defaults to `.`) and prints a snippet that includes a project-scoped browser token:
 
@@ -145,7 +198,7 @@ npx aidev projects add . --origin http://localhost:3000
 <script src="http://127.0.0.1:4100/overlay.js" defer></script>
 ```
 
-Paste the printed snippet into the document `<head>` (a Next.js App Router root layout works). Use the origin your dev server actually listens on. The token is for local development only — do not commit it or ship it in production. Tokens are stored in `$AIDEV_HOME/browser-tokens.json` (mode `0600`) so the same snippet still works after `aidev` restarts.
+Paste the printed snippet into the document `<head>`. Prefer `@aidev/next` for App Router apps. Use the origin your dev server actually listens on. The token is for local development only — do not commit it or ship it in production. Tokens are stored in `$AIDEV_HOME/browser-tokens.json` (mode `0600`) so the same snippet still works after `aidev` restarts.
 
 `GET /overlay.js` is public (static code, no auth). If that file 404s, build `@aidev/overlay` and restart the gateway.
 
@@ -520,7 +573,7 @@ The `@aidev/gateway` package ships a `bin` named `aidev` (Node's `util.parseArgs
 | `aidev stop` | Signals the pid file and removes it. If the pid file is missing but `/health` on the configured port reports this gateway's version, calls `POST /api/v1/shutdown` with the machine token. |
 | `aidev status` | Calls `/health` and `/api/v1/status` with the machine token and prints projects, active runs, and providers. Does not need the pid file. |
 | `aidev doctor` | Prints each provider's availability, binary path, and `<bin> --version`. |
-| `aidev init [--dry-run]` | Detects the package manager and Vite/Next/plain. For Vite, prints `<pm> add -D @aidev/vite` and edits `vite.config.*` when it can. Never installs. |
+| `aidev init [--dry-run]` | Detects the package manager and Vite/Next/plain. For Vite, prints `<pm> add -D @aidev/vite` and edits `vite.config.*` when it can. For Next, prints `<pm> add -D @aidev/next`, layout instructions for `<AidevScript />`, and wraps a simple `next.config.*` object export. Never installs. |
 | `aidev projects add [dir] --origin <url>` | Registers the root (`.` when `dir` is omitted) and prints a script-tag snippet with a browser token. `--origin` is required and must be http(s) localhost / loopback / LAN. Persists the token in `$AIDEV_HOME/browser-tokens.json` (mode `0600`). |
 | `aidev open` | Prints `http://127.0.0.1:<port>/` and opens it. That page is a placeholder until the dashboard exists. |
 
