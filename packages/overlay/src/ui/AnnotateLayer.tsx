@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   emptyAnnotState,
   extendPen,
+  fitWithin,
   pushShape,
   undoShape,
   type AnnotShape,
@@ -10,8 +11,10 @@ import {
   type AnnotTool,
   type Point,
 } from '../inspector/annotate.js';
-import { DARK_PALETTE } from './theme/tokens.js';
+import { trapFocus } from './focus-trap.js';
 import { MoveUpRightIcon, PencilIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from './icons.js';
+import { isModKey } from './keyboard.js';
+import { DARK_PALETTE } from './theme/tokens.js';
 
 export interface AnnotateLayerProps {
   dataUrl: string;
@@ -23,34 +26,86 @@ const ACCENT = DARK_PALETTE.accent;
 const STROKE = 2.5;
 
 export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [tool, setTool] = useState<AnnotTool>('pen');
   const [state, setState] = useState<AnnotState>(emptyAnnotState);
+  const [display, setDisplay] = useState<{ width: number; height: number } | null>(null);
   const [draftText, setDraftText] = useState<{ at: Point; value: string } | null>(null);
   const drag = useRef<{ tool: AnnotTool; start: Point; shape?: AnnotShape } | null>(null);
   const toolRef = useRef(tool);
+  const stateRef = useRef(state);
+  const onAttachRef = useRef(onAttach);
+  const onCancelRef = useRef(onCancel);
   toolRef.current = tool;
+  stateRef.current = state;
+  onAttachRef.current = onAttach;
+  onCancelRef.current = onCancel;
 
-  useEffect(() => {
-    const image = new Image();
-    image.onload = () => {
-      imageRef.current = image;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      canvas.width = image.width;
-      canvas.height = image.height;
-      paint(canvas, image, state.shapes);
-    };
-    image.src = dataUrl;
-  }, [dataUrl]);
+  function layoutImage(image: HTMLImageElement): void {
+    imageRef.current = image;
+    const naturalW = Math.max(1, image.naturalWidth || image.width);
+    const naturalH = Math.max(1, image.naturalHeight || image.height);
+    setDisplay(
+      fitWithin(naturalW, naturalH, window.innerWidth * 0.9, window.innerHeight * 0.75),
+    );
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = naturalW;
+    canvas.height = naturalH;
+    paintShapes(canvas, stateRef.current.shapes);
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const image = imageRef.current;
-    if (!canvas || !image) return;
-    paint(canvas, image, state.shapes);
+    if (!canvas || !imageRef.current) return;
+    paintShapes(canvas, state.shapes);
   }, [state]);
+
+  useEffect(() => {
+    const onResize = (): void => {
+      const image = imageRef.current;
+      if (!image) return;
+      const naturalW = Math.max(1, image.naturalWidth || image.width);
+      const naturalH = Math.max(1, image.naturalHeight || image.height);
+      setDisplay(fitWithin(naturalW, naturalH, window.innerWidth * 0.9, window.innerHeight * 0.75));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    const node = dialogRef.current;
+    if (!node) return;
+    const first = node.querySelector<HTMLElement>('[data-action="annotate-pen"]');
+    if (first) first.focus();
+    else node.focus();
+    const release = trapFocus(node);
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancelRef.current();
+        return;
+      }
+      if (isModKey(event) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        setState((prev) => undoShape(prev));
+        return;
+      }
+      if (event.key !== 'Enter' || event.metaKey || event.ctrlKey) return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      attachCurrent();
+    };
+    node.addEventListener('keydown', onKey);
+    return () => {
+      release();
+      node.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   function pointFromEvent(event: MouseEvent): Point | null {
     const canvas = canvasRef.current;
@@ -95,13 +150,12 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
       return;
     }
     const canvas = canvasRef.current;
-    const image = imageRef.current;
-    if (!canvas || !image) return;
+    if (!canvas) return;
     const preview: AnnotShape =
       current.tool === 'arrow'
         ? { kind: 'arrow', from: current.start, to: point }
         : { kind: 'rect', from: current.start, to: point };
-    paint(canvas, image, [...state.shapes, preview]);
+    paintShapes(canvas, [...state.shapes, preview]);
   }
 
   function onPointerUp(event: MouseEvent): void {
@@ -126,19 +180,34 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
     setDraftText(null);
   }
 
-  function attach(): void {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  function attachCurrent(): void {
+    const image = imageRef.current;
+    if (!image) return;
+    const width = Math.max(1, image.naturalWidth || image.width);
+    const height = Math.max(1, image.naturalHeight || image.height);
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = width;
+    exportCanvas.height = height;
+    paint(exportCanvas, image, stateRef.current.shapes);
     try {
-      onAttach(canvas.toDataURL('image/png'));
+      onAttachRef.current(exportCanvas.toDataURL('image/png'));
     } catch {
-      onCancel();
+      onCancelRef.current();
     }
   }
 
+  const textStyle = textInputStyle(draftText?.at, display, canvasRef.current);
+
   return (
-    <div className="annotate-backdrop" role="dialog" aria-label="Annotate screenshot" data-action="annotate-layer">
-      <div className="annotate-modal">
+    <div className="annotate-backdrop" data-action="annotate-layer">
+      <div
+        ref={dialogRef}
+        className="annotate-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Annotate screenshot"
+        tabIndex={-1}
+      >
         <div className="annotate-toolbar">
           <ToolButton action="annotate-pen" label="Pen" pressed={tool === 'pen'} onClick={() => setTool('pen')}>
             <PencilIcon size={14} />
@@ -152,18 +221,14 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
           <ToolButton action="annotate-text" label="Text" pressed={tool === 'text'} onClick={() => setTool('text')}>
             <TypeIcon size={14} />
           </ToolButton>
-          <ToolButton
-            action="annotate-undo"
-            label="Undo"
-            onClick={() => setState((prev) => undoShape(prev))}
-          >
+          <ToolButton action="annotate-undo" label="Undo" onClick={() => setState((prev) => undoShape(prev))}>
             <Undo2Icon size={14} />
           </ToolButton>
           <span className="annotate-spacer" />
           <button type="button" className="ghost" data-action="annotate-cancel" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="primary" data-action="annotate-attach" onClick={attach}>
+          <button type="button" className="primary" data-action="annotate-attach" onClick={attachCurrent}>
             Attach
           </button>
           <button
@@ -177,7 +242,17 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
             <XIcon />
           </button>
         </div>
-        <div className="annotate-stage">
+        <div
+          className="annotate-stage"
+          style={display ? { width: `${display.width}px`, height: `${display.height}px` } : undefined}
+        >
+          <img
+            className="annotate-image"
+            src={dataUrl}
+            alt="Captured screenshot"
+            draggable={false}
+            onLoad={(event) => layoutImage(event.currentTarget)}
+          />
           <canvas
             ref={canvasRef}
             className="annotate-canvas"
@@ -189,7 +264,7 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
           {draftText ? (
             <input
               className="annotate-text-input"
-              style={{ left: draftText.at.x, top: draftText.at.y }}
+              style={textStyle}
               value={draftText.value}
               autoFocus
               aria-label="Annotation text"
@@ -202,6 +277,7 @@ export function AnnotateLayer({ dataUrl, onAttach, onCancel }: AnnotateLayerProp
                 }
                 if (event.key === 'Escape') {
                   event.preventDefault();
+                  event.stopPropagation();
                   setDraftText(null);
                 }
               }}
@@ -241,18 +317,44 @@ function ToolButton({
   );
 }
 
+function textInputStyle(
+  at: Point | undefined,
+  display: { width: number; height: number } | null,
+  canvas: HTMLCanvasElement | null,
+): JSX.CSSProperties | undefined {
+  if (!at || !display || !canvas || canvas.width === 0 || canvas.height === 0) {
+    return at ? { left: at.x, top: at.y } : undefined;
+  }
+  return {
+    left: (at.x / canvas.width) * display.width,
+    top: (at.y / canvas.height) * display.height,
+  };
+}
+
+function paintShapes(canvas: HTMLCanvasElement, shapes: readonly AnnotShape[]): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  strokeSetup(ctx);
+  for (const shape of shapes) drawShape(ctx, shape);
+}
+
 function paint(canvas: HTMLCanvasElement, image: HTMLImageElement, shapes: readonly AnnotShape[]): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(image, 0, 0);
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  strokeSetup(ctx);
+  for (const shape of shapes) drawShape(ctx, shape);
+}
+
+function strokeSetup(ctx: CanvasRenderingContext2D): void {
   ctx.strokeStyle = ACCENT;
   ctx.fillStyle = ACCENT;
   ctx.lineWidth = STROKE;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.font = '16px ui-sans-serif, system-ui, sans-serif';
-  for (const shape of shapes) drawShape(ctx, shape);
 }
 
 function drawShape(ctx: CanvasRenderingContext2D, shape: AnnotShape): void {

@@ -208,14 +208,26 @@ async function exerciseInspector(page: Page): Promise<void> {
   });
 
   await page.keyboard.press('Escape');
-  const screenshotChip = page.locator('[data-action="annotate-screenshot"]');
-  if ((await screenshotChip.count()) > 0) {
-    await screenshotChip.first().click();
+  const preview = page.locator('[data-action="screenshot-preview"]');
+  if ((await preview.count()) > 0) {
+    await preview.first().click();
+    await page.locator('[data-action="annotate-screenshot"]').click();
   } else {
     await page.locator('[data-action="screenshot-element"]').click();
   }
   try {
     await page.locator('[data-action="annotate-layer"]').waitFor({ timeout: 15_000 });
+    await page.waitForFunction(
+      () => {
+        const root = document.querySelector('ai-devtools')?.shadowRoot;
+        const image = root?.querySelector('.annotate-image');
+        if (!(image instanceof HTMLImageElement)) return false;
+        const rect = image.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      },
+      undefined,
+      { timeout: 10_000 },
+    );
     await page.locator('[data-action="annotate-arrow"]').click();
     const canvas = page.locator('.annotate-canvas');
     const box = await canvas.boundingBox();

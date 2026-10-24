@@ -79,8 +79,17 @@ code, pre { font-family: var(--aid-mono); }
   justify-content: center;
   width: 28px;
   height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   border-radius: var(--aid-radius-sm);
   color: var(--aid-text-muted);
+  cursor: pointer;
+}
+
+.icon-button svg {
+  display: block;
+  flex: none;
 }
 
 .icon-button:hover { background: var(--aid-bg-hover); color: var(--aid-text); }

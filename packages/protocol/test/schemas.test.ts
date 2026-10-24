@@ -1044,4 +1044,30 @@ describe('protocol schemas', () => {
     });
     expect(InferRequestSchema.parse({ messages: [{ role: 'user', content: 'Hi' }] }).images).toBeUndefined();
   });
+
+  it('accepts up to five selectedElements and keeps selectedElement for compat', () => {
+    const element = (id: string) => ({
+      tagName: 'strong',
+      id,
+      className: '',
+      outerHTML: `<strong id="${id}"></strong>`,
+      computedStyles: {},
+    });
+    const parsed = FrontendContextPayloadSchema.parse({
+      selectedElement: element('one'),
+      selectedElements: [element('one'), element('two')],
+    });
+    expect(parsed.selectedElement?.id).toBe('one');
+    expect(parsed.selectedElements?.map((item) => item.id)).toEqual(['one', 'two']);
+    expect(
+      FrontendContextPayloadSchema.safeParse({
+        selectedElements: ['a', 'b', 'c', 'd', 'e', 'f'].map(element),
+      }).success,
+    ).toBe(false);
+    expect(
+      FrontendContextPayloadSchema.parse({
+        selectedElements: ['a', 'b', 'c', 'd', 'e'].map(element),
+      }).selectedElements,
+    ).toHaveLength(5);
+  });
 });

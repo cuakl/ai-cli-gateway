@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   downscaleSize,
   emptyAnnotState,
+  fitWithin,
   MAX_IMAGE_EDGE,
   pushShape,
   redoShape,
@@ -27,6 +28,13 @@ describe('annotation undo stack', () => {
 describe('downscale math', () => {
   it('leaves images within the long-edge budget alone', () => {
     expect(downscaleSize(800, 600)).toEqual({ width: 800, height: 600, scale: 1 });
+  });
+
+  it('fits a tiny capture into 90vw × 75vh without filling the viewport', () => {
+    const fitted = fitWithin(29, 22, 1296, 675);
+    expect(fitted.width).toBe(87);
+    expect(fitted.height).toBe(66);
+    expect(fitted.scale).toBe(3);
   });
 
   it('scales so the long edge is 1600', () => {

@@ -66,6 +66,8 @@ export interface GatherContextOptions {
   failedRequests?: boolean;
   pinnedErrors?: readonly FrontendError[];
   pinnedRequests?: readonly FailedNetworkRequest[];
+  /** Extra selected elements (max 5). `selectedElement` stays the first for backward compat. */
+  selectedElements?: readonly SelectedElement[];
   /** Defaults to {@link CONTEXT_MAX_AGE_MS}. Pass `Infinity` to skip the age filter. */
   maxAgeMs?: number;
   now?: number;
@@ -106,8 +108,11 @@ export async function gatherContext(
   if (vite && attachConsole && !recentErrors.some((entry) => sameError(entry, vite))) {
     recentErrors.push(vite);
   }
+  const selectedElements = (options.selectedElements ?? (selectedElement ? [selectedElement] : [])).slice(0, 5);
+  const first = selectedElements[0] ?? selectedElement;
   const payload = FrontendContextPayloadSchema.parse({
-    ...(selectedElement ? { selectedElement } : {}),
+    ...(first ? { selectedElement: first } : {}),
+    ...(selectedElements.length > 0 ? { selectedElements } : {}),
     ...(screenshot ? { screenshotBase64: screenshot } : {}),
     recentErrors,
     recentConsoleLogs: attachConsole

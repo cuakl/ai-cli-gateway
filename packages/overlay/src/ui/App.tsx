@@ -1278,7 +1278,8 @@ export function App({ config }: AppProps) {
     markRunStart();
     const attachedChips = chips;
     const excluded = new Set(excludedKinds);
-    const includeSelection = Boolean(selected) && !excluded.has('selection');
+    const includeSelection =
+      !excluded.has('selection') && (selections.length > 0 || Boolean(selected));
     const includeScreenshot = autoAttach.screenshot && !excluded.has('screenshot');
     const screenshotChip = attachedChips.find((chip) => chip.kind === 'screenshot');
     setSending(true);
@@ -1309,14 +1310,19 @@ export function App({ config }: AppProps) {
     };
 
     try {
-      const live = includeSelection ? elementRef.current : null;
-      const selectedElement = includeSelection
-        ? live?.isConnected
-          ? locateElement(live)
-          : selected ?? undefined
-        : undefined;
+      const selectedElements = includeSelection
+        ? (selections.length > 0 ? selections : selected ? [selected] : [])
+            .slice(0, MAX_SELECTIONS)
+            .map((item, index) => {
+              const node = elementRefs.current[index];
+              return node?.isConnected ? locateElement(node) : item;
+            })
+        : [];
+      const live = includeSelection ? (elementRefs.current[0] ?? elementRef.current) : null;
+      const selectedElement = selectedElements[0];
       const context = await gatherContext(selectedElement, live, {
         screenshot: false,
+        selectedElements,
         consoleErrors: autoAttach.consoleErrors && !excluded.has('console'),
         failedRequests: autoAttach.failedRequests && !excluded.has('network'),
         pinnedErrors,

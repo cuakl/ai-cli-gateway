@@ -52,6 +52,29 @@ export function downscaleSize(
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)), scale };
 }
 
+/**
+ * Scale an image to fit inside maxWidth × maxHeight, preserving aspect ratio.
+ * Upscale is capped so a 30px capture does not fill the viewport.
+ */
+export function fitWithin(
+  width: number,
+  height: number,
+  maxWidth: number,
+  maxHeight: number,
+  maxScale = 3,
+): { width: number; height: number; scale: number } {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const maxW = Math.max(1, maxWidth);
+  const maxH = Math.max(1, maxHeight);
+  const scale = Math.min(maxW / w, maxH / h, Math.max(1, maxScale));
+  return {
+    width: Math.max(1, Math.round(w * scale)),
+    height: Math.max(1, Math.round(h * scale)),
+    scale,
+  };
+}
+
 export function extendPen(shape: Extract<AnnotShape, { kind: 'pen' }>, point: Point): Extract<AnnotShape, { kind: 'pen' }> {
   const last = shape.points[shape.points.length - 1];
   if (last && last.x === point.x && last.y === point.y) return shape;

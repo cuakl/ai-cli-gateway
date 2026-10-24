@@ -86,6 +86,7 @@ export function Composer({
   const listboxId = useId();
   const [activeMention, setActiveMention] = useState(0);
   const [openCrumb, setOpenCrumb] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const listed = providers.length > 0 ? providers : fallbackProviders();
   const current = listed.find((item) => item.id === provider) ?? listed[0];
   const unavailable = current ? current.available === false : false;
@@ -103,6 +104,10 @@ export function Composer({
 
   useEffect(() => {
     onEscapeOverlay(() => {
+      if (previewOpen) {
+        setPreviewOpen(false);
+        return true;
+      }
       if (openCrumb) {
         setOpenCrumb(null);
         return true;
@@ -112,7 +117,7 @@ export function Composer({
       return true;
     });
     return () => onEscapeOverlay(() => false);
-  }, [mentionOpen, openCrumb, onEscapeOverlay, onMentionQuery]);
+  }, [mentionOpen, openCrumb, previewOpen, onEscapeOverlay, onMentionQuery]);
 
   function moveMention(delta: number): void {
     if (mentionOptions.length === 0) return;
@@ -165,12 +170,17 @@ export function Composer({
                   <button
                     type="button"
                     className="chip-thumb-btn"
-                    data-action="annotate-screenshot"
-                    aria-label="Annotate screenshot"
-                    title="Annotate screenshot"
-                    onClick={() => onAnnotateScreenshot?.(chip)}
+                    data-action="screenshot-preview"
+                    aria-label="Preview screenshot"
+                    title="Preview screenshot"
+                    aria-expanded={chip.kind === 'screenshot' ? previewOpen : undefined}
+                    onClick={() => {
+                      setOpenCrumb(null);
+                      setPreviewOpen((open) => (chip.kind === 'screenshot' ? !open : open));
+                      if (chip.kind !== 'screenshot') onAnnotateScreenshot?.(chip);
+                    }}
                   >
-                    <img className="chip-thumb" src={chip.thumbnail} alt="" />
+                    <img className="chip-thumb" src={chip.thumbnail} alt="" width={32} height={20} />
                   </button>
                 ) : null}
                 {chip.kind === 'selection' && chip.breadcrumb && chip.breadcrumb.length > 0 ? (
@@ -180,7 +190,10 @@ export function Composer({
                     data-action="chip-breadcrumb"
                     aria-label={`Retarget ${chip.label}`}
                     title={chip.breadcrumb.join(' › ')}
-                    onClick={() => setOpenCrumb((current) => (current === chip.id ? null : chip.id))}
+                    onClick={() => {
+                      setPreviewOpen(false);
+                      setOpenCrumb((current) => (current === chip.id ? null : chip.id));
+                    }}
                   >
                     {chip.label}
                   </button>
@@ -229,6 +242,38 @@ export function Composer({
                       {chip.breadcrumb?.slice(0, index + 1).join(' › ')}
                     </button>
                   ))}
+                </div>
+              ) : null}
+              {previewOpen && chip.kind === 'screenshot' && chip.thumbnail ? (
+                <div
+                  className="chip-preview"
+                  role="dialog"
+                  aria-label="Screenshot preview"
+                  data-action="screenshot-preview-popover"
+                >
+                  <img className="chip-preview-image" src={chip.thumbnail} alt="Screenshot preview" />
+                  <div className="chip-preview-actions">
+                    <button
+                      type="button"
+                      data-action="annotate-screenshot"
+                      onClick={() => {
+                        setPreviewOpen(false);
+                        onAnnotateScreenshot?.(chip);
+                      }}
+                    >
+                      Annotate
+                    </button>
+                    <button
+                      type="button"
+                      data-action="remove-screenshot-preview"
+                      onClick={() => {
+                        setPreviewOpen(false);
+                        onRemoveChip(chip);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>

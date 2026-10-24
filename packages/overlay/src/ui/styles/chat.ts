@@ -27,11 +27,12 @@ export const CHAT_CSS = `
 }
 
 .chip-thumb {
-  width: var(--aid-space-5);
-  height: var(--aid-space-5);
+  width: 32px;
+  height: 20px;
   border-radius: var(--aid-radius-sm);
   object-fit: cover;
   flex: none;
+  display: block;
 }
 
 .transcript {

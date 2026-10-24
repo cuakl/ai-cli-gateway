@@ -20,7 +20,7 @@ export {
   appendSelection,
   MAX_SELECTIONS,
 } from './inspector/walk.js';
-export { downscaleSize, emptyAnnotState, pushShape, undoShape } from './inspector/annotate.js';
+export { downscaleSize, emptyAnnotState, fitWithin, pushShape, undoShape } from './inspector/annotate.js';
 export { DEFAULT_GATEWAY_URL, OVERLAY_TAG } from './types.js';
 export {
   CLI_NAME,

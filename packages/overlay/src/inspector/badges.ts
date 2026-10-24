@@ -74,8 +74,12 @@ export class SelectionBadges {
       }
       const rect = element.getBoundingClientRect();
       badge.textContent = String(index + 1);
-      badge.style.top = `${Math.max(rect.top - 8, 4)}px`;
-      badge.style.left = `${Math.max(rect.left - 8, 4)}px`;
+      const size = 18;
+      const offset = 10;
+      const top = clamp(rect.top - offset, 0, window.innerHeight - size);
+      const left = clamp(rect.left - offset, 0, window.innerWidth - size);
+      badge.style.top = `${top}px`;
+      badge.style.left = `${left}px`;
     });
     layer.style.display = live.length > 0 ? 'block' : 'none';
   }
@@ -121,8 +125,12 @@ function badgeStyle(): Record<string, string> {
     lineHeight: '18px',
     textAlign: 'center',
     pointerEvents: 'none',
-    boxShadow: '0 2px 8px rgba(0,0,0,.35)',
+    boxShadow: '0 0 0 1px rgba(255,255,255,.75), 0 1px 4px rgba(0,0,0,.35)',
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
 function isOverlayElement(node: Element): boolean {

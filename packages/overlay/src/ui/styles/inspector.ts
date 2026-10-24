@@ -24,6 +24,9 @@ export const INSPECTOR_CSS = `
   border: 0;
   background: transparent;
   cursor: pointer;
+  flex: none;
+  border-radius: var(--aid-radius-sm);
+  overflow: hidden;
 }
 
 .chip-crumb {
@@ -71,6 +74,48 @@ export const INSPECTOR_CSS = `
   position: relative;
 }
 
+.chip-preview {
+  position: absolute;
+  z-index: var(--aid-z-popover);
+  right: 0;
+  bottom: calc(100% + var(--aid-space-1));
+  width: 220px;
+  padding: var(--aid-space-2);
+  background: var(--aid-bg-raised);
+  border: 1px solid var(--aid-border);
+  border-radius: var(--aid-radius-md);
+  box-shadow: var(--aid-shadow-lg);
+}
+
+.chip-preview-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: var(--aid-radius-sm);
+  background: var(--aid-bg);
+}
+
+.chip-preview-actions {
+  display: flex;
+  gap: var(--aid-space-1);
+  margin-top: var(--aid-space-2);
+}
+
+.chip-preview-actions button {
+  flex: 1;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--aid-radius-full);
+  background: var(--aid-bg-hover);
+  color: var(--aid-text);
+  font-size: var(--aid-text-xs);
+  font-weight: 560;
+  cursor: pointer;
+}
+
 .screenshot-tools {
   display: flex;
   flex-wrap: wrap;
@@ -104,8 +149,9 @@ export const INSPECTOR_CSS = `
 .annotate-modal {
   display: flex;
   flex-direction: column;
-  width: min(960px, 100%);
-  max-height: calc(100vh - var(--aid-space-6));
+  width: max-content;
+  max-width: 90vw;
+  min-width: min(520px, 100%);
   overflow: hidden;
   pointer-events: auto;
   background: var(--aid-bg-raised);
@@ -133,15 +179,26 @@ export const INSPECTOR_CSS = `
 
 .annotate-stage {
   position: relative;
-  min-height: 0;
-  overflow: auto;
+  align-self: center;
+  flex: none;
+  overflow: hidden;
   background: var(--aid-bg);
 }
 
-.annotate-canvas {
+.annotate-image {
   display: block;
-  max-width: 100%;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+.annotate-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   cursor: crosshair;
 }
 

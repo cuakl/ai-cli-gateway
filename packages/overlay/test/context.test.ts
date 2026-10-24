@@ -46,6 +46,7 @@ describe('gatherContext', () => {
     expect(FrontendContextPayloadSchema.parse(payload)).toEqual(payload);
     expect(payload.screenshotBase64).toBe('data:image/png;base64,abc');
     expect(payload.selectedElement?.id).toBe('hero');
+    expect(payload.selectedElements?.map((entry) => entry.id)).toEqual(['hero']);
     expect(payload.recentConsoleLogs.some((entry) => entry.level === 'error' && entry.args[0] === 'paint failed')).toBe(
       true,
     );

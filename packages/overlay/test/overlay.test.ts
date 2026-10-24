@@ -130,6 +130,100 @@ describe('initDevtools', () => {
     button.remove();
   });
 
+  it('sends every shift-selected element on run.start', async () => {
+    const workspace = createFakeWorkspace({
+      onRequest(message, emit) {
+        if (message.type !== 'run.start') return undefined;
+        queueMicrotask(() => {
+          emit(runEvent(message.requestId, 'done'));
+        });
+        return { type: 'run.accepted', requestId: message.requestId, threadId: 'thr_1', runId: 'run_1' };
+      },
+    });
+    const host = initDevtools({ workspace });
+    const shadow = host?.shadowRoot;
+    const inspect = shadow?.querySelector('[data-action="inspect"]') as HTMLButtonElement;
+    inspect.click();
+
+    const first = document.createElement('strong');
+    first.id = 'price-86';
+    first.textContent = '$86';
+    first.setAttribute('data-loc', 'src/components/CardGrid.tsx:30:12');
+    const second = document.createElement('strong');
+    second.id = 'price-42';
+    second.textContent = '$42';
+    second.setAttribute('data-loc', 'src/components/CardGrid.tsx:30:12');
+    document.body.append(first, second);
+    vi.spyOn(first, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 40, 16));
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue(new DOMRect(120, 20, 40, 16));
+    const fromPoint = vi.spyOn(document, 'elementFromPoint');
+    fromPoint.mockReturnValue(first);
+
+    first.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 12, clientY: 22 }));
+    first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 22 }));
+    await vi.waitFor(() => expect(shadow?.querySelectorAll('[data-chip="selection"]').length).toBe(1));
+
+    inspect.click();
+    fromPoint.mockReturnValue(second);
+    second.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 122, clientY: 22 }));
+    second.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 122, clientY: 22, shiftKey: true }),
+    );
+    await vi.waitFor(() => expect(shadow?.querySelectorAll('[data-chip="selection"]').length).toBe(2));
+
+    const textarea = shadow?.querySelector('textarea') as HTMLTextAreaElement;
+    textarea.value = 'Restyle both prices';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    (shadow?.querySelector('[data-action="send"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(workspace.sent.some((message) => message.type === 'run.start')).toBe(true));
+    const start = workspace.sent.find((message) => message.type === 'run.start');
+    expect(start?.type === 'run.start' ? start.context.selectedElement?.id : '').toBe('price-86');
+    expect(start?.type === 'run.start' ? start.context.selectedElements?.map((item) => item.id) : []).toEqual([
+      'price-86',
+      'price-42',
+    ]);
+    first.remove();
+    second.remove();
+  });
+
+  it('shows a screenshot thumbnail that opens annotate with labeled tools', async () => {
+    const workspace = createFakeWorkspace();
+    const host = initDevtools({ workspace });
+    const shadow = host?.shadowRoot;
+    const inspect = shadow?.querySelector('[data-action="inspect"]') as HTMLButtonElement;
+    inspect.click();
+    const button = document.createElement('button');
+    button.id = 'shot-target';
+    button.setAttribute('data-loc', 'src/components/Hero.tsx:11:4');
+    document.body.append(button);
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 100, 40));
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(button);
+    button.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 12, clientY: 22 }));
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 12, clientY: 22 }));
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-chip="screenshot"]')).toBeTruthy());
+    const thumb = shadow?.querySelector('[data-action="screenshot-preview"] img') as HTMLImageElement;
+    expect(thumb).toBeTruthy();
+    expect(thumb.getAttribute('width')).toBe('32');
+    expect(thumb.getAttribute('height')).toBe('20');
+    (shadow?.querySelector('[data-action="screenshot-preview"]') as HTMLButtonElement).click();
+    expect(shadow?.querySelector('[data-action="screenshot-preview-popover"]')).toBeTruthy();
+    expect(shadow?.querySelector('[data-action="annotate-screenshot"]')?.textContent).toContain('Annotate');
+    expect(shadow?.querySelector('[data-action="remove-screenshot-preview"]')?.textContent).toContain('Remove');
+    (shadow?.querySelector('[data-action="annotate-screenshot"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(shadow?.querySelector('[data-action="annotate-layer"]')).toBeTruthy());
+    const pen = shadow?.querySelector('[data-action="annotate-pen"]') as HTMLButtonElement;
+    expect(pen.getAttribute('aria-label')).toBe('Pen');
+    expect(pen.getAttribute('title')).toBe('Pen');
+    expect(pen.getAttribute('aria-pressed')).toBe('true');
+    expect(pen.querySelector('svg')).toBeTruthy();
+    expect(shadow?.querySelector('[data-action="annotate-arrow"] svg')).toBeTruthy();
+    expect(shadow?.querySelector('[data-action="annotate-rect"] svg')).toBeTruthy();
+    expect(shadow?.querySelector('[data-action="annotate-text"] svg')).toBeTruthy();
+    expect(shadow?.querySelector('[data-action="annotate-undo"] svg')).toBeTruthy();
+    expect(shadow?.querySelector('.annotate-image')).toBeTruthy();
+    button.remove();
+  });
+
   it('sends editor.open on option-click while inspecting', async () => {
     const workspace = createFakeWorkspace();
     const host = initDevtools({ workspace });

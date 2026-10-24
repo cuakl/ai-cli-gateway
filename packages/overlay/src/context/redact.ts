@@ -71,6 +71,9 @@ export function redactContext(payload: FrontendContextPayload): FrontendContextP
   const redacted: FrontendContextPayload = {
     ...payload,
     ...(payload.selectedElement ? { selectedElement: redactSelected(payload.selectedElement) } : {}),
+    ...(payload.selectedElements && payload.selectedElements.length > 0
+      ? { selectedElements: payload.selectedElements.map(redactSelected) }
+      : {}),
     recentErrors: payload.recentErrors.map(redactError),
     recentConsoleLogs: payload.recentConsoleLogs.map((entry) => ({
       ...entry,
