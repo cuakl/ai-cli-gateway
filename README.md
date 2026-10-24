@@ -1,58 +1,73 @@
 # AI CLI Gateway
 
-Inspect an element in the browser, describe the change, and let a CLI you are already logged into edit the project. The reply streams into a drawer. Vite hot-reloads the page. You review the diff and commit from the same toolbar.
+An API gateway for AI coding CLIs, plus an in-browser overlay. Inspect an element, describe the change, and a CLI you are already signed into — Cursor (`agent`), Claude Code (`claude`), Codex (`codex`), or Antigravity (`agy`) — edits the project. Vite hot-reloads. You review the diff and commit from the same toolbar.
 
-No LLM API key. The gateway shells out to Cursor (`agent`), Antigravity (`agy`), Claude Code (`claude`), or Codex (`codex`). The same process also exposes a local inference API (`POST /api/v1/infer`, OpenAI-compatible `POST /v1/chat/completions`) so other projects can reuse that sign-in.
+The same local process is an inference API (`POST /api/v1/infer`, OpenAI-compatible `POST /v1/chat/completions`). Other projects can reuse that sign-in. No LLM API key.
 
-![Lumen storefront with the AI DevTools toolbar](docs/images/lumen-storefront.png)
+![Chat after a run, with Review / Undo on the side dock](docs/images/chat-after-run.png)
 
-## Requirements
+## 60-second install (Vite)
 
-- Node.js 20 or newer
-- pnpm 10 (`packageManager` is `pnpm@10.7.1`)
-- Git
-- One of `agent`, `agy`, `claude`, or `codex` on `PATH` when you want a real model. `pnpm e2e` uses a scripted provider and does not need a CLI.
-
-## Setup
+Requires Node.js 20+ and one of those CLIs on `PATH` when you want a real model.
 
 ```bash
-pnpm install
-pnpm build
-pnpm test
+pnpm add -D @aidev/vite
 ```
 
-`pnpm build` compiles the packages and the overlay bundle the Vite plugin injects.
+```ts
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { aiDevtools } from '@aidev/vite';
 
-## Run the demo
-
-From the repository root:
+export default defineConfig({
+  plugins: [react(), aiDevtools()],
+});
+```
 
 ```bash
-pnpm install
-pnpm build
-pnpm demo
+pnpm dev
 ```
 
-Open http://127.0.0.1:5173. The Vite plugin starts one gateway on `127.0.0.1:4100` when `/health` does not answer (`aidev start --detach`). Stop it with `aidev stop`, or after a build:
+The plugin injects the overlay in development only, registers the project, and starts the gateway on `127.0.0.1:4100` when `/health` does not answer. Production builds leave it out.
+
+Then: **Inspect** an element → type a change in **Chat** → **Review** the diff → commit. Full walkthrough: [docs/manual.md](docs/manual.md).
+
+## Other frameworks
+
+**Next.js**
 
 ```bash
-node packages/gateway/dist/cli.js stop
+pnpm add -D @aidev/next
 ```
 
-The first start creates `~/.aidev/token`. `AIDEV_HOME` overrides that directory.
+```ts
+import { withAidev } from '@aidev/next';
 
-1. Click **Inspect**, then click the hero button ("Add the lamp"). The chat chip shows the component and source file.
-2. Pick a provider that `GET /health` reports as available.
-3. Ask for a change, for example: "Change the hero button to purple with rounded-full styling". Press the send button, or Cmd/Ctrl+Enter.
-4. Watch the reply in the chat drawer. The CLI edits the demo, and Vite hot-reloads the page.
-5. Open **Diffs**, review the hunks, and click **Commit Changes**. Leave "Push to origin" off unless you mean to push.
-6. **Terminal** is a shell in the demo directory. **Tests** runs `pnpm test` for the demo.
+export default withAidev({
+  // existing options
+});
+```
 
-The full walkthrough, with the chat, diff, terminal, and test panels, is in the [manual](docs/manual.md).
+Add `<AidevScript />` from `@aidev/next/script` to the App Router root layout.
+
+**Script tag** (any localhost / LAN dev server):
+
+```bash
+npx aidev start
+npx aidev projects add . --origin http://localhost:3000
+```
+
+Paste the printed snippet into `<head>`. `--origin` is required.
+
+**Vue:** `aiDevtools({ framework: 'vue' })` is a template `nodeTransform` — pass it to `@vitejs/plugin-vue` and keep `aiDevtools()` in the Vite plugin list.
+
+**Svelte:** `aidevSveltePreprocess()` in `svelte.config.js`, plus `aiDevtools()` in Vite.
+
+`npx aidev init` detects Vite or Next, prints the install command, and edits a simple config when it can. It never installs.
 
 ## Use it as a local LLM API
 
-With the gateway running, any project can call the signed-in CLI in read-only ask mode. Nothing in this repo is edited. Cold start is several seconds.
+With the gateway running, ask mode is read-only. Nothing in your repo is edited. Cold start is several seconds.
 
 ```ts
 import { createClient } from '@aidev/client';
@@ -76,71 +91,30 @@ const completion = await openai.chat.completions.create({
 });
 ```
 
-`model` is `"<provider>/<model>"` (for example `cursor/gpt-5`), `"<provider>"`, or omitted. Details, images, and structured output are in the [manual](docs/manual.md#use-it-as-an-llm-api).
+`model` is `"<provider>/<model>"` (for example `cursor/gpt-5`), `"<provider>"`, or omitted. Details are in the [manual](docs/manual.md#inference-api).
 
-```bash
-pnpm --filter @aidev/example-inference-node start
-pnpm --filter @aidev/example-inference-openai start
-```
+## `aidev` CLI
 
-## Add it to a Vite app
-
-```ts
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { aiDevtools } from '@aidev/vite';
-
-export default defineConfig({
-  plugins: [react(), aiDevtools()],
-});
-```
-
-The plugin injects the overlay only while Vite is serving. Production builds leave it out. Put `aiDevtools()` before the JSX compiler; it moves itself ahead of `@vitejs/plugin-react` when it can. Details and plugin options are in the [manual](docs/manual.md#add-the-overlay-to-a-vite-app).
-
-## Layout
-
-```
-ai-cli-gateway/
-├── packages/
-│   ├── protocol/           # @aidev/protocol
-│   ├── adapters/           # @aidev/adapters
-│   ├── gateway/            # @aidev/gateway
-│   ├── overlay/            # @aidev/overlay
-│   ├── vite/               # @aidev/vite
-│   └── client/             # @aidev/client
-├── apps/
-│   └── demo-react-app/     # Lumen, the storefront used to exercise the overlay
-└── examples/
-    ├── inference-node/     # @aidev/client generate / stream / generateObject
-    └── inference-openai/   # official openai package against /v1
-```
-
-| Package | What it does |
+| Command | What it does |
 | --- | --- |
-| `@aidev/protocol` | Zod schemas for prompts, stream events, threads, runs, projects, and workspace messages. |
-| `@aidev/adapters` | CLI adapters, binary lookup, and the process watchdog. |
-| `@aidev/gateway` | HTTP, Server-Sent Events, and WebSocket on `127.0.0.1:4100`. |
-| `@aidev/overlay` | Shadow-DOM toolbar: inspect, chat, diffs, terminal, tests. |
-| `@aidev/vite` | Injects the overlay, stamps `data-loc` on JSX, registers the project, and auto-starts the gateway. |
-| `@aidev/client` | Fetch SDK for inference: `generate`, `stream`, `generateObject`. |
+| `aidev start [--port N] [--detach]` | Listen on loopback. `--detach` writes a pid file and a log. |
+| `aidev stop` | Stop the detached gateway. |
+| `aidev status` | Health, projects, active runs, and providers. |
+| `aidev init [--dry-run]` | Detect the app and print or apply setup. Never installs. |
+| `aidev open [--print]` | Print the dashboard URL. Opens a browser unless `--print`. |
+| `aidev doctor [--live]` | Provider capability matrix. `--live` asks each CLI to reply `OK`. |
+| `aidev projects add [dir] --origin <url>` | Register a project and print a script-tag snippet. |
 
-## Checks
+The first start creates `~/.aidev/token`. `AIDEV_HOME` overrides that directory.
 
-```bash
-pnpm test
-pnpm e2e
-```
+![Review dock: this-run files, unified diff, commit](docs/images/review.png)
 
-`pnpm e2e` builds the gateway, plugin, and overlay, copies the demo into a temporary git repository, and drives the browser through inspect, prompt, hot reload, diff, and commit. The scripted provider applies the hero-button edit, so the run does not call a real model and does not commit in this repository.
+## Manual
 
-## Safeguards
+Install variants, overlay walkthrough (inspect, chat, review, terminal, tests, console, settings, ⌘K), gateway auth, inference, CLI flags, and security: **[docs/manual.md](docs/manual.md)**.
 
-- The gateway binds to loopback unless `HOST` is set.
-- Prompt `cwd` and file paths must stay inside a registered project. The plugin registers the directory Vite is serving.
-- CLI arguments are an array passed to `spawn`. A hung process is stopped with `SIGTERM`, then `SIGKILL`. The default limit is 5 minutes.
-- Git paths are confined to that project root.
-- The overlay talks only to the gateway. Chat, diffs, the terminal, and tests share the project WebSocket.
-- While a run is active the plugin holds Vite full reloads and sends one reload after the run settles. Module hot updates still apply immediately.
-- A missing or signed-out CLI returns a structured error with setup steps.
+This repository also has a Lumen demo: `pnpm install && pnpm build && pnpm demo` → http://127.0.0.1:5173.
 
-Environment variables, request examples, and the error codes are in the [manual](docs/manual.md).
+## Open decisions
+
+- **Product name and npm scope** are still the `@aidev` placeholder (`aidev` CLI, `~/.aidev`, `<ai-devtools>`). Not decided before publish.

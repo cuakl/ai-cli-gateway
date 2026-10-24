@@ -669,6 +669,8 @@ Acceptance:
 
 ### Phase 11 — Docs and polish
 
+Status (2026-10-24): User-facing docs are `README.md` and `docs/manual.md` (kept as two files, not split). Screenshots in `docs/images/` were copied from `/tmp/aidev-shots/` where those files existed (`dash-providers` was not among them). Product name and the `@aidev` npm scope remain an open decision.
+
 1. Rewrite README around the two products: "Edit your app from the browser" and "Use your CLI subscription as a local LLM API". Each gets a 60-second quickstart.
 2. Restructure `docs/manual.md` into `docs/overlay.md`, `docs/gateway-api.md`, `docs/providers.md` (capability matrix, verified versions, setup), and `docs/security.md`.
 3. Regenerate all screenshots from the Playwright visual suite, so the docs always match the product. Add a short GIF of the full loop.
