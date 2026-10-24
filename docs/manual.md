@@ -469,9 +469,9 @@ Providers the gateway can spawn:
 | `claude` | `claude` | `claude`, then `~/.local/bin` and `~/.claude/local` |
 | `codex` | `codex` | `codex`, then `~/.local/bin` and `~/.npm-global/bin` |
 
-`provider_unavailable` means the binary is not on `PATH` and not in those lookup paths. The response `setup` array is what to install and which command to run once so the CLI can sign in. `cli_auth_required` means the process started and then asked for login — sign in in a normal terminal (for Cursor, the IDE session or `agent login`). The gateway does not store credentials.
+`provider_unavailable` means the binary is not on `PATH` and not in those lookup paths. The response `setup` array is what to install and which command to run once so the CLI can sign in. `cli_auth_required` means the process started and then asked for login. Sign in with `agent login` in a normal terminal. The gateway does not store credentials.
 
-When `CURSOR_AUTH_TOKEN` and `CURSOR_API_KEY` are unset, the Cursor adapter reads the signed-in IDE access token from Cursor's local state and passes it to that child as `CURSOR_AUTH_TOKEN`. The gateway does not write the token to disk or include it in logs.
+The Cursor CLI persists `CURSOR_AUTH_TOKEN` as both its access token and its refresh token, which signs out `agent login`. The gateway clears that variable on the child. `CURSOR_API_KEY` is still passed through.
 
 ---
 

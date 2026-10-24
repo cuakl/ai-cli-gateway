@@ -124,6 +124,45 @@ describe('auth, CORS, and project scope', () => {
     expect(failure).toMatch(/403|4403/);
   });
 
+  it('accepts localhost when the project was registered as 127.0.0.1', async () => {
+    const server = await bareServer();
+    const root = await tempDir('loopback-origin-');
+    const registered = await postJson(
+      `${server.url}/api/v1/projects/register`,
+      { root, origin: 'http://127.0.0.1:5173' },
+      { headers: { authorization: `Bearer ${server.token}` } },
+    );
+    expect(registered.status).toBe(200);
+    if (!isRecord(registered.body) || typeof registered.body.projectId !== 'string') return;
+    if (typeof registered.body.browserToken !== 'string') return;
+
+    const health = await requestJson(`${server.url}/health`, {
+      headers: { origin: 'http://localhost:5173' },
+    });
+    expect(health.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+
+    const socket = new WebSocket(
+      `${server.url.replace('http', 'ws')}/api/v1/projects/${registered.body.projectId}/ws?token=${encodeURIComponent(registered.body.browserToken)}`,
+      { headers: { origin: 'http://localhost:5173' } },
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        socket.terminate();
+        reject(new Error('socket was not accepted'));
+      }, 3_000);
+      socket.once('open', () => {
+        clearTimeout(timer);
+        socket.close();
+        resolve();
+      });
+      socket.once('unexpected-response', (_request, response) => {
+        clearTimeout(timer);
+        socket.terminate();
+        reject(new Error(`unexpected ${response.statusCode}`));
+      });
+    });
+  });
+
   it('returns the same project id when a root is registered twice and can add an origin', async () => {
     const server = await bareServer();
     const root = await tempDir('idem-');

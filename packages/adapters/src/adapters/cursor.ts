@@ -2,7 +2,6 @@ import { createStreamEvent, type PromptOptions, type UnifiedStreamEvent } from '
 import type { ProcessManager } from '../session/manager.js';
 import { BinaryResolver, describeAuthFailure } from '../utils/binary.js';
 import { BaseAdapter } from './base.js';
-import { readCursorIdeAccessToken } from './cursor-auth.js';
 import {
   collectFilePaths,
   doneEvent,
@@ -80,11 +79,7 @@ export class CursorAdapter extends BaseAdapter {
   override readonly provider = 'cursor' as const;
   private readonly lines = new CursorLineParser();
 
-  constructor(
-    binaries?: BinaryResolver,
-    processes?: ProcessManager,
-    private readonly readIdeToken: () => Promise<string | null> = readCursorIdeAccessToken,
-  ) {
+  constructor(binaries?: BinaryResolver, processes?: ProcessManager) {
     super(binaries, processes);
   }
 
@@ -118,20 +113,15 @@ export class CursorAdapter extends BaseAdapter {
   }
 
   /**
-   * The IDE and the CLI keep separate logins. When the CLI has no token of
-   * its own, pass the IDE access token as `CURSOR_AUTH_TOKEN`. The value is
-   * only placed in the child environment, never in argv, events, or logs.
-   * An explicit `CURSOR_AUTH_TOKEN` or `CURSOR_API_KEY` on the gateway wins.
+   * `agent` persists `CURSOR_AUTH_TOKEN` with `setAuthentication(token, token)`,
+   * using the same value as the refresh token. That replaces a real `agent login`.
+   * The IDE token and a token inherited from a Cursor-spawned gateway both do this.
+   * An empty value is unset, so the CLI keeps its own credentials. `CURSOR_API_KEY`
+   * is left alone: the CLI exchanges that for a real access/refresh pair.
    */
   protected override async executionEnv(): Promise<NodeJS.ProcessEnv | undefined> {
-    if (process.env.CURSOR_AUTH_TOKEN || process.env.CURSOR_API_KEY) return undefined;
-    try {
-      const token = await this.readIdeToken();
-      if (!token) return undefined;
-      return { CURSOR_AUTH_TOKEN: token };
-    } catch {
-      return undefined;
-    }
+    if (!process.env.CURSOR_AUTH_TOKEN) return undefined;
+    return { CURSOR_AUTH_TOKEN: '' };
   }
 
   protected override async afterExecute(_options: PromptOptions, sessionId: string): Promise<void> {

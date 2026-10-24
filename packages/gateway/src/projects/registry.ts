@@ -3,6 +3,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { Project } from '@aidev/protocol';
 import { generateToken, readConfig, writeConfig, writeSecretFile } from '../home.js';
+import { sameDevOrigin } from './origin.js';
 
 /** Project-scoped browser tokens, mode 0600, so script-tag snippets survive a restart. */
 export const BROWSER_TOKENS_FILENAME = 'browser-tokens.json';
@@ -63,9 +64,11 @@ export class ProjectRegistry {
   }
 
   allowsOrigin(origin: string): boolean {
-    if (this.trustedOrigins.has(origin)) return true;
+    for (const allowed of this.trustedOrigins) {
+      if (sameDevOrigin(allowed, origin)) return true;
+    }
     for (const project of this.projects.values()) {
-      if (project.origins.includes(origin)) return true;
+      if (project.origins.some((allowed) => sameDevOrigin(allowed, origin))) return true;
     }
     return false;
   }

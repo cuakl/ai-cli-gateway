@@ -229,9 +229,10 @@ describe('CursorAdapter', () => {
     expect(parser.parse(final, 's')[0]?.payload.text).toBe('Updated hero button');
   });
 
-  it('passes an IDE access token only through the child environment', async () => {
+  it('does not forward CURSOR_AUTH_TOKEN to the CLI', async () => {
     const cwd = await tempWorkspace('gateway-cursor-auth-env-');
-    const token = 'cursor-test-token-value-0123456789';
+    const previous = process.env.CURSOR_AUTH_TOKEN;
+    process.env.CURSOR_AUTH_TOKEN = 'cursor-test-token-value-0123456789';
     const seen: Array<NodeJS.ProcessEnv | undefined> = [];
     class RecordingManager extends ProcessManager {
       override start(options: ManagedProcessOptions): Promise<number> {
@@ -240,24 +241,22 @@ describe('CursorAdapter', () => {
       }
     }
     try {
-      const adapter = new CursorAdapter(
-        resolverFor('cursor', fixture('mock-cursor.js')),
-        new RecordingManager(),
-        async () => token,
-      );
+      const adapter = new CursorAdapter(resolverFor('cursor', fixture('mock-cursor.js')), new RecordingManager());
       const result = await adapter.execute({ prompt: 'update the hero', cwd, sessionId: 'sess-auth' }, () => {});
       expect(result.exitCode).toBe(0);
-      expect(seen).toEqual([{ CURSOR_AUTH_TOKEN: token }]);
-      expect(JSON.stringify(adapter.buildArgs({ prompt: 'update the hero', cwd }))).not.toContain(token);
+      expect(seen).toEqual([{ CURSOR_AUTH_TOKEN: '' }]);
+      expect(JSON.stringify(adapter.buildArgs({ prompt: 'update the hero', cwd }))).not.toContain('cursor-test-token');
     } finally {
+      if (previous === undefined) delete process.env.CURSOR_AUTH_TOKEN;
+      else process.env.CURSOR_AUTH_TOKEN = previous;
       await rm(cwd, { recursive: true, force: true });
     }
   });
 
-  it('does not replace an explicit Cursor API key', async () => {
+  it('leaves the child environment alone when no auth token is set', async () => {
     const cwd = await tempWorkspace('gateway-cursor-auth-explicit-');
-    const previous = process.env.CURSOR_API_KEY;
-    process.env.CURSOR_API_KEY = 'explicit-cursor-key';
+    const previous = process.env.CURSOR_AUTH_TOKEN;
+    delete process.env.CURSOR_AUTH_TOKEN;
     const seen: Array<NodeJS.ProcessEnv | undefined> = [];
     class RecordingManager extends ProcessManager {
       override start(options: ManagedProcessOptions): Promise<number> {
@@ -266,16 +265,12 @@ describe('CursorAdapter', () => {
       }
     }
     try {
-      const adapter = new CursorAdapter(
-        resolverFor('cursor', fixture('mock-cursor.js')),
-        new RecordingManager(),
-        async () => 'cursor-test-token-value-0123456789',
-      );
+      const adapter = new CursorAdapter(resolverFor('cursor', fixture('mock-cursor.js')), new RecordingManager());
       await adapter.execute({ prompt: 'update the hero', cwd, sessionId: 'sess-explicit' }, () => {});
       expect(seen).toEqual([undefined]);
     } finally {
-      if (previous === undefined) delete process.env.CURSOR_API_KEY;
-      else process.env.CURSOR_API_KEY = previous;
+      if (previous === undefined) delete process.env.CURSOR_AUTH_TOKEN;
+      else process.env.CURSOR_AUTH_TOKEN = previous;
       await rm(cwd, { recursive: true, force: true });
     }
   });

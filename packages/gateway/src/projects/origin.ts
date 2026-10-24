@@ -28,6 +28,39 @@ export function parseDevOrigin(input: string): string {
   return url.origin;
 }
 
+/**
+ * True when both origins are the same URL, or the same scheme and port on
+ * loopback aliases (`localhost`, `127.0.0.1`, `::1`). Vite binds 127.0.0.1
+ * while the page is often opened as localhost.
+ */
+export function sameDevOrigin(allowed: string, actual: string): boolean {
+  if (allowed === actual) return true;
+  let left: URL;
+  let right: URL;
+  try {
+    left = new URL(allowed);
+    right = new URL(actual);
+  } catch {
+    return false;
+  }
+  if (left.protocol !== right.protocol) return false;
+  const leftPort = left.port || defaultPort(left.protocol);
+  const rightPort = right.port || defaultPort(right.protocol);
+  if (leftPort !== rightPort) return false;
+  return isLoopbackAlias(left.hostname) && isLoopbackAlias(right.hostname);
+}
+
+function defaultPort(protocol: string): string {
+  if (protocol === 'https:') return '443';
+  if (protocol === 'http:') return '80';
+  return '';
+}
+
+function isLoopbackAlias(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 export function invalidOriginMessage(input: string): string {
   return `Invalid --origin "${input}". Use an http(s) URL on localhost, 127.0.0.1, or a private LAN address.`;
 }
