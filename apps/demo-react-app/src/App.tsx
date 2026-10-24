@@ -6,14 +6,18 @@ import { Hero } from './components/Hero';
 
 export function App() {
   return (
-    <div className="page">
-      <Header />
-      <main>
+    <div className="app">
+      <div className="hero-shell">
+        <Header />
         <Hero />
-        <CardGrid />
-        <ContactForm />
-        <Diagnostics />
-      </main>
+      </div>
+      <div className="page">
+        <main>
+          <CardGrid />
+          <ContactForm />
+          <Diagnostics />
+        </main>
+      </div>
     </div>
   );
 }
