@@ -17,6 +17,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@aidev/overlay": "workspace:*",
     "@aidev/protocol": "workspace:*",
     "preact": "^10.26.9"
   },

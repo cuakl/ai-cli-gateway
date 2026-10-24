@@ -71,11 +71,16 @@
         }, 0);
       });
     </script>
-    <script src="../dist/overlay.js"></script>
+    <script src="../dist/overlay.js" defer data-ai-devtools="overlay"></script>
     <script>
-      if (!customElements.get('ai-devtools')) {
-        document.getElementById('boot-error').hidden = false;
-      }
+      customElements.whenDefined('ai-devtools').then(() => {
+        document.getElementById('boot-error').hidden = true;
+      });
+      window.setTimeout(() => {
+        if (!customElements.get('ai-devtools')) {
+          document.getElementById('boot-error').hidden = false;
+        }
+      }, 2000);
     </script>
   </body>
 </html>

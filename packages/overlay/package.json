@@ -3,12 +3,16 @@
   "version": "0.0.1",
   "description": "In-browser DevTools overlay: Shadow DOM host, element inspector, and gateway chat",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/app.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/app.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "import": "./src/chat.ts"
     },
     "./overlay.js": "./dist/overlay.js"
   },
@@ -16,9 +20,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "pnpm --filter @aidev/protocol build && vite build && vite build --mode iife && tsc -p tsconfig.json --emitDeclarationOnly",
+    "build": "pnpm --filter @aidev/protocol build && vite build && vite build --mode loader && tsc -p tsconfig.json --emitDeclarationOnly",
     "typecheck": "pnpm --filter @aidev/protocol build && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:size": "node scripts/check-size.mjs"
   },
   "dependencies": {
     "@aidev/protocol": "workspace:*",

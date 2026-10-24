@@ -99,7 +99,7 @@ import { TestRunner } from './TestRunner.js';
 import { chipFromTestFailure, formatTestFooter, type TestFailureFix } from './test-report.js';
 import { useTestSession } from './use-test-session.js';
 import { applyHostTheme, type OverlayTheme } from './theme/tokens.js';
-import { AnnotateLayer } from './AnnotateLayer.js';
+import { LazyAnnotateLayer } from './LazyAnnotateLayer.js';
 import { ToastStack, type Toast } from './ToastStack.js';
 import {
   WorkspaceClient,
@@ -1394,7 +1394,7 @@ export function App({ config }: AppProps) {
         </div>
       ) : null}
       {annotating ? (
-        <AnnotateLayer
+        <LazyAnnotateLayer
           dataUrl={annotating}
           onCancel={() => setAnnotating(null)}
           onAttach={(dataUrl) => {

@@ -50,8 +50,9 @@ export interface BuildServerOptions {
   /** Bind address recorded for the loopback PTY check. */
   host?: string;
   /**
-   * Overlay IIFE to serve at `GET /overlay.js`. Tests pass a fixture.
-   * Defaults to the `@aidev/overlay` build (404 if that file is missing).
+   * Overlay loader to serve at `GET /overlay.js`. Chunks are served from the
+   * same directory at `GET /overlay/*`. Tests pass a fixture. Defaults to the
+   * `@aidev/overlay` build (404 if that file is missing).
    */
   overlayFile?: string;
   /**

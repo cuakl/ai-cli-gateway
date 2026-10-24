@@ -9,7 +9,7 @@ import { DEFAULT_GATEWAY_URL, ensureGateway } from './companion.js';
 import { EARLY_ERROR_SCRIPT } from './early-errors.js';
 import { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 import { injectDataLoc } from './jsx-transform.js';
-import { overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
+import { overlayGatewaySrc, overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
 import { placeBeforeJsxCompilers } from './plugin-order.js';
 import { readMachineToken, registerProject, type RegisteredProject } from './register-project.js';
 import { createVueDataLocTransform, type VueNodeTransform } from './vue-transform.js';
@@ -19,6 +19,7 @@ export { DEFAULT_GATEWAY_URL, ensureGateway, gatewayStartHint, resolveGatewayBin
 export type { EnsureGatewayOptions } from './companion.js';
 export { DEFAULT_RELOAD_DEBOUNCE_MS, createHmrGuard } from './hmr-guard.js';
 export { EARLY_ERROR_SCRIPT } from './early-errors.js';
+export { overlayGatewaySrc, overlayPublicPath, resolveOverlayBundle } from './overlay-path.js';
 export { injectDataLoc } from './jsx-transform.js';
 export type { DataLocResult } from './jsx-transform.js';
 export { readMachineToken, registerProject } from './register-project.js';
@@ -144,7 +145,8 @@ function createDevtoolsPlugin(options: DevtoolsPluginOptions): Plugin {
             injectTo: 'head-prepend',
           },
         ];
-        if (html.includes(publicPath)) return tags;
+        const overlaySrc = overlayGatewaySrc(gatewayUrl);
+        if (html.includes(overlaySrc) || html.includes(publicPath)) return tags;
         const registered = await registerNow();
         const configScript = `globalThis.${GLOBAL_CONFIG_KEY}=${JSON.stringify(configFor(registered)).replace(/</g, '\\u003c')};`;
         tags.push(
@@ -156,7 +158,7 @@ function createDevtoolsPlugin(options: DevtoolsPluginOptions): Plugin {
           },
           {
             tag: 'script',
-            attrs: { type: 'module', src: publicPath },
+            attrs: { src: overlaySrc, defer: true, 'data-ai-devtools': 'overlay' },
             injectTo: 'head',
           },
         );

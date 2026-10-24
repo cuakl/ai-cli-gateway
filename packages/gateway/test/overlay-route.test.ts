@@ -46,4 +46,44 @@ describe('GET /overlay.js', () => {
       await server.close();
     }
   });
+
+  it('serves a same-directory chunk at /overlay/* without auth', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aidev-overlay-'));
+    dirs.push(dir);
+    await writeFile(path.join(dir, 'overlay.js'), 'window.__AI_DEVTOOLS_OVERLAY__=1;\n');
+    await writeFile(path.join(dir, 'app.js'), 'export const overlayApp=1;\n');
+    const server = await startTestServer({
+      overlayFile: path.join(dir, 'overlay.js'),
+      registerDefaultRoot: false,
+      authenticateFetch: false,
+    });
+    try {
+      const response = await fetch(`${server.url}/overlay/app.js`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('javascript');
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      expect(await response.text()).toContain('overlayApp');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rejects path traversal into files outside dist', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aidev-overlay-'));
+    dirs.push(dir);
+    await writeFile(path.join(dir, 'overlay.js'), 'window.__AI_DEVTOOLS_OVERLAY__=1;\n');
+    const server = await startTestServer({
+      overlayFile: path.join(dir, 'overlay.js'),
+      registerDefaultRoot: false,
+      authenticateFetch: false,
+    });
+    try {
+      const escaped = await fetch(`${server.url}/overlay/../package.json`);
+      expect(escaped.status).toBe(404);
+      const encoded = await fetch(`${server.url}/overlay/%2e%2e/package.json`);
+      expect(encoded.status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
 });

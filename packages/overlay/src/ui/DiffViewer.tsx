@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { GitDiffFile, GitDiffHunk, GitDiffSummary, GitLogEntry, GitStatus } from '@aidev/protocol';
 import { EmptyState } from './EmptyState.js';
-import { Highlight } from './diff/Highlight.js';
-import { languageFromPath } from './diff/tokens.js';
+import { languageFromPath } from './diff/language.js';
+import { LazyHighlight } from './diff/LazyHighlight.js';
 import { GitCompareIcon, LoaderIcon, SparklesIcon } from './icons.js';
 import { isEditableTarget } from './keyboard.js';
 import type { DiffViewMode } from './prefs.js';
@@ -60,6 +60,10 @@ export function DiffViewer({
   const [branchDraft, setBranchDraft] = useState<string | null>(null);
   const [prUrl, setPrUrl] = useState<string | null>(null);
   const [hunkIndex, setHunkIndex] = useState(0);
+
+  useEffect(() => {
+    void import('./diff/Highlight.js');
+  }, []);
 
   const listed = summary?.files;
   const files = useMemo(() => {
@@ -778,7 +782,7 @@ function DiffLine({
       )}
       <code>
         <span className="diff-marker">{row.marker}</span>
-        <Highlight text={row.code} language={language} />
+        <LazyHighlight text={row.code} language={language} />
       </code>
     </div>
   );

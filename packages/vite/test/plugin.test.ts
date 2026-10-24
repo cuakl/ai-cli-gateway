@@ -43,14 +43,16 @@ describe('aiDevtools', () => {
     expect(hook && typeof hook === 'object' ? hook.order : undefined).toBe('pre');
     const earlyAt = html.indexOf('data-ai-devtools="early"');
     const configAt = html.indexOf('data-ai-devtools="config"');
-    const overlayAt = html.indexOf('/@ai-devtools/overlay.js');
+    const overlayAt = html.indexOf('http://127.0.0.1:4100/overlay.js');
     expect(html).toContain('__AI_DEVTOOLS_EARLY__');
     expect(earlyAt).toBeGreaterThan(html.indexOf('<head>'));
     expect(earlyAt).toBeLessThan(configAt);
     expect(earlyAt).toBeLessThan(overlayAt);
     expect(html).toMatch(
-      /<head>[\s\S]*<script type="module" src="\/@ai-devtools\/overlay\.js"><\/script>[\s\S]*<\/head>/,
+      /<head>[\s\S]*<script[^>]+src="http:\/\/127\.0\.0\.1:4100\/overlay\.js"[^>]*><\/script>[\s\S]*<\/head>/,
     );
+    expect(html).toContain('data-ai-devtools="overlay"');
+    expect(html).toMatch(/<script[^>]+src="http:\/\/127\.0\.0\.1:4100\/overlay\.js"[^>]*\bdefer\b/);
     expect(html).toContain('__AI_DEVTOOLS__');
     const injected = html.match(/__AI_DEVTOOLS__=(\{.*?\});/);
     expect(injected?.[1]).toBeTruthy();
@@ -101,7 +103,10 @@ describe('aiDevtools', () => {
       if (!bundle || !('output' in bundle)) throw new Error('Expected a Rollup build result');
       const html = bundle.output.find((file) => file.fileName.endsWith('.html'));
       expect(html?.type).toBe('asset');
-      if (html?.type === 'asset') expect(String(html.source)).not.toContain('@ai-devtools/overlay.js');
+      if (html?.type === 'asset') {
+        expect(String(html.source)).not.toContain('@ai-devtools/overlay.js');
+        expect(String(html.source)).not.toContain('/overlay.js');
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

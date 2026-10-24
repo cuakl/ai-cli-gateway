@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 
 /**
- * Absolute path of the built overlay IIFE.
+ * Absolute path of the built overlay loader (`dist/overlay.js`).
  * Resolved through the `@aidev/overlay/overlay.js` package export when that
  * package is installed, otherwise the sibling workspace build.
  */

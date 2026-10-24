@@ -38,8 +38,8 @@ Then `pnpm dev`. The plugin injects the overlay only while Vite is serving. Prod
 
 During `serve` the plugin:
 
-1. Injects `globalThis.__AI_DEVTOOLS__` (`gatewayUrl`, `projectId`, `browserToken`, `projectName`) and `<script type="module" src="/@ai-devtools/overlay.js">`.
-2. Serves the overlay bundle and `GET /@ai-devtools/config` (re-registers and returns the project's browser token after a gateway restart).
+1. Injects `globalThis.__AI_DEVTOOLS__` (`gatewayUrl`, `projectId`, `browserToken`, `projectName`) and `<script src="{gatewayUrl}/overlay.js" defer>`. The loader dynamically imports `./overlay/app.js` from the gateway origin.
+2. Serves `GET /@ai-devtools/config` (re-registers and returns the project's browser token after a gateway restart). Overlay JS and chunks come from the gateway (`GET /overlay.js` and `GET /overlay/*`).
 3. Writes `data-loc="file:line:col"` onto JSX that does not already have one (Babel's 0-based column).
 4. Connects to the project WebSocket with the machine token, listens for `project.activity`, and holds Vite `full-reload` messages while `activeRuns > 0`. One reload is sent 250 ms after the count returns to 0. Module hot updates still apply as files change.
 
@@ -54,7 +54,7 @@ During `serve` the plugin:
 | `framework` | `'react'` | `'vue'` returns a template `nodeTransform` instead of a Vite plugin. |
 | `root` | `process.cwd()` | Project root used for Vue `data-loc` paths. |
 
-If the toolbar never appears, the plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart Vite after rebuilding `@aidev/overlay` so it picks up the bundle. The page source should contain `/@ai-devtools/overlay.js`.
+If the toolbar never appears, the plugin is off for `vite build` and for `aiDevtools({ enabled: false })`. Restart Vite after rebuilding `@aidev/overlay` so the gateway can serve the loader and chunks. The page source should contain `/overlay.js` pointing at the gateway.
 
 ### Next.js
 
@@ -120,7 +120,7 @@ npx aidev projects add . --origin http://localhost:3000
 
 Paste the printed snippet into `<head>`. Prefer `@aidev/next` for App Router apps. Use the origin your dev server actually listens on. The token is for local development only — do not commit it or ship it in production. Tokens are stored in `$AIDEV_HOME/browser-tokens.json` (mode `0600`) so the same snippet still works after `aidev` restarts.
 
-`GET /overlay.js` is public (static code, no auth). If that file 404s, build `@aidev/overlay` and restart the gateway.
+`GET /overlay.js` is the public loader (static code, no auth). It imports ESM chunks from `GET /overlay/*` (JS, CSS, and source maps) on the same origin. Path traversal outside the overlay dist is rejected. If the loader 404s, build `@aidev/overlay` and restart the gateway.
 
 Component names come from React Fiber when it is present; otherwise the inspector shows the DOM path and `data-loc` is absent unless you add Vue or Svelte stamping.
 

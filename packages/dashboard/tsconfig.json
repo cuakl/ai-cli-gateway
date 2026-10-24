@@ -7,7 +7,10 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "@aidev/overlay/chat": ["../overlay/src/chat.ts"]
+    }
   },
   "include": ["src"]
 }

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
-import xtermCss from '@xterm/xterm/css/xterm.css?inline';
 import { createPtyFitController } from './layout/pty-fit.js';
 import { AID_MONO, DARK_PALETTE } from './theme/tokens.js';
 import type { WorkspaceConnection } from './workspace-client.js';
@@ -27,20 +26,21 @@ export function TerminalPanel({ workspace, hidden = false, cwd }: TerminalPanelP
     const pendingOutput: Array<{ id: string; data: string }> = [];
     const cleanups: Array<() => void> = [];
 
-    const root = host.getRootNode();
-    if (root instanceof ShadowRoot && !root.querySelector('style[data-xterm]')) {
-      const style = document.createElement('style');
-      style.dataset.xterm = 'true';
-      style.textContent = xtermCss;
-      root.appendChild(style);
-    }
-
     void (async () => {
       try {
-        const [{ Terminal }, { FitAddon }] = await Promise.all([
+        const [{ Terminal }, { FitAddon }, cssMod] = await Promise.all([
           import('@xterm/xterm'),
           import('@xterm/addon-fit'),
+          import('@xterm/xterm/css/xterm.css?inline'),
         ]);
+        const xtermCss = typeof cssMod.default === 'string' ? cssMod.default : '';
+        const root = host.getRootNode();
+        if (root instanceof ShadowRoot && !root.querySelector('style[data-xterm]')) {
+          const style = document.createElement('style');
+          style.dataset.xterm = 'true';
+          style.textContent = xtermCss;
+          root.appendChild(style);
+        }
         if (cancelled) return;
         term = new Terminal({
           cursorBlink: true,

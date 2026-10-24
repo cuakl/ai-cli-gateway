@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config';
 
 /**
  * Library mode externalizes dependencies unless a later hook forces them in.
- * The overlay script has to run from a single file with no import map.
+ * The overlay app has to run in the browser with no import map.
  */
 function bundleDependencies(): Plugin {
   return {
@@ -20,8 +20,39 @@ function bundleDependencies(): Plugin {
   };
 }
 
+function overlayManualChunks(id: string): string | undefined {
+  const normalized = id.replace(/\\/g, '/');
+  if (normalized.includes('/node_modules/@xterm/') || normalized.includes('/node_modules/xterm')) {
+    return 'xterm';
+  }
+  if (normalized.includes('/node_modules/html-to-image/')) return 'html-to-image';
+  return undefined;
+}
+
 export default defineConfig(({ mode }) => {
-  const iife = mode === 'iife';
+  const loader = mode === 'loader';
+  if (loader) {
+    return {
+      plugins: [],
+      build: {
+        emptyOutDir: false,
+        sourcemap: true,
+        minify: true,
+        lib: {
+          entry: fileURLToPath(new URL('./src/loader.ts', import.meta.url)),
+          name: 'AiDevtoolsLoader',
+          formats: ['iife'],
+          fileName: () => 'overlay.js',
+        },
+        rollupOptions: {
+          output: {
+            inlineDynamicImports: true,
+          },
+        },
+      },
+    };
+  }
+
   return {
     plugins: [bundleDependencies()],
     esbuild: {
@@ -30,9 +61,7 @@ export default defineConfig(({ mode }) => {
     },
     resolve: {
       alias: {
-        '@aidev/protocol': fileURLToPath(
-          new URL('../protocol/src/index.ts', import.meta.url),
-        ),
+        '@aidev/protocol': fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)),
         'node:crypto': fileURLToPath(new URL('./src/shims/crypto.ts', import.meta.url)),
       },
     },
@@ -44,26 +73,24 @@ export default defineConfig(({ mode }) => {
       testTimeout: 10_000,
     },
     build: {
-      emptyOutDir: !iife,
+      emptyOutDir: true,
       sourcemap: true,
-      minify: iife,
-      cssCodeSplit: false,
-      lib: iife
-        ? {
-            entry: fileURLToPath(new URL('./src/auto.ts', import.meta.url)),
-            name: 'AiDevtools',
-            formats: ['iife'],
-            fileName: () => 'overlay.js',
-          }
-        : {
-            entry: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
-            formats: ['es'],
-            fileName: () => 'index.js',
-          },
+      minify: true,
+      cssCodeSplit: true,
+      lib: {
+        entry: {
+          app: fileURLToPath(new URL('./src/auto.ts', import.meta.url)),
+        },
+        formats: ['es'],
+      },
       rollupOptions: {
         external: [],
+        preserveEntrySignatures: false,
         output: {
-          inlineDynamicImports: true,
+          entryFileNames: '[name].js',
+          chunkFileNames: '[name].js',
+          assetFileNames: '[name][extname]',
+          manualChunks: overlayManualChunks,
         },
       },
     },

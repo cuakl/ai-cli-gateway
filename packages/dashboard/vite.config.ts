@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@aidev/protocol': fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)),
+      '@aidev/overlay/chat': fileURLToPath(new URL('../overlay/src/chat.ts', import.meta.url)),
     },
   },
   test: {
