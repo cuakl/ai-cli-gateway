@@ -12,6 +12,7 @@ export interface SettingsModalProps {
   dockMode: DockMode;
   provider: ProviderType;
   autoAttach: AutoAttachPrefs;
+  runTestsAfterAgent: boolean;
   availability: Partial<Record<ProviderType, boolean>>;
   gatewayUrl: string;
   connectionState: WorkspaceConnectionState;
@@ -20,6 +21,7 @@ export interface SettingsModalProps {
   onDockMode: (mode: DockMode) => void;
   onProvider: (provider: ProviderType) => void;
   onAutoAttach: (next: AutoAttachPrefs) => void;
+  onRunTestsAfterAgent: (value: boolean) => void;
   onClose: () => void;
 }
 
@@ -41,6 +43,7 @@ export function SettingsModal({
   dockMode,
   provider,
   autoAttach,
+  runTestsAfterAgent,
   availability,
   gatewayUrl,
   connectionState,
@@ -49,6 +52,7 @@ export function SettingsModal({
   onDockMode,
   onProvider,
   onAutoAttach,
+  onRunTestsAfterAgent,
   onClose,
 }: SettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -213,6 +217,18 @@ export function SettingsModal({
                   onChange={(event) => onAutoAttach({ ...autoAttach, screenshot: event.currentTarget.checked })}
                 />
                 Screenshot
+              </label>
+            </fieldset>
+            <fieldset className="settings-fieldset">
+              <legend>Tests</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  data-action="run-tests-after-agent"
+                  checked={runTestsAfterAgent}
+                  onChange={(event) => onRunTestsAfterAgent(event.currentTarget.checked)}
+                />
+                Run tests after each agent run
               </label>
             </fieldset>
           </section>

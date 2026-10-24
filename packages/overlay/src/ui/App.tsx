@@ -47,6 +47,7 @@ import {
   emptyChatState,
   hydrateFromThread,
   runTouchedFiles,
+  setRunTestResult,
   startTurn,
   type ChatState,
   type ContextChip,
@@ -95,6 +96,8 @@ import { SettingsModal } from './SettingsModal.js';
 import { SideDock } from './SideDock.js';
 import { TerminalPanel } from './Terminal.js';
 import { TestRunner } from './TestRunner.js';
+import { chipFromTestFailure, formatTestFooter, type TestFailureFix } from './test-report.js';
+import { useTestSession } from './use-test-session.js';
 import { applyHostTheme, type OverlayTheme } from './theme/tokens.js';
 import { AnnotateLayer } from './AnnotateLayer.js';
 import { ToastStack, type Toast } from './ToastStack.js';
@@ -151,6 +154,7 @@ export function App({ config }: AppProps) {
   const [theme, setTheme] = useState<OverlayTheme>(storedPrefs.theme ?? config.theme ?? 'dark');
   const [dockMode, setDockMode] = useState<DockMode>(storedPrefs.dockMode ?? config.dock ?? 'push');
   const [autoAttach, setAutoAttach] = useState<AutoAttachPrefs>(storedPrefs.autoAttach ?? { ...DEFAULT_AUTO_ATTACH });
+  const [runTestsAfterAgent, setRunTestsAfterAgent] = useState(storedPrefs.runTestsAfterAgent === true);
   const [viewport, setViewport] = useState(readViewport());
   const [chatUnread, setChatUnread] = useState(false);
   const [status, setStatus] = useState<'connected' | 'idle'>('idle');
@@ -207,7 +211,8 @@ export function App({ config }: AppProps) {
   const pushSnapshot = useRef<PushSnapshot | null>(null);
   const skipSideFocus = useRef(true);
   const skipBottomFocus = useRef(true);
-  const pendingTestRun = useRef(false);
+  const autoTestRunId = useRef<string | null>(null);
+  const runTestsAfterAgentRef = useRef(runTestsAfterAgent);
   const sideOpenRef = useRef(sideOpen);
   const sideTabRef = useRef(sideTab);
   const inspectingRef = useRef(inspecting);
@@ -237,6 +242,7 @@ export function App({ config }: AppProps) {
   settingsOpenRef.current = settingsOpen;
   hiddenRef.current = hidden;
   sendingRef.current = sending;
+  runTestsAfterAgentRef.current = runTestsAfterAgent;
   chatRef.current = chat;
   threadIdRef.current = threadId;
   runIdRef.current = runId;
@@ -310,6 +316,15 @@ export function App({ config }: AppProps) {
       browserToken: config.browserToken,
     });
   }, [config.browserToken, config.projectId, config.workspace, gatewayUrl]);
+
+  const tests = useTestSession(workspace, (message) => {
+    const runId = autoTestRunId.current;
+    if (!runId) return;
+    autoTestRunId.current = null;
+    dispatchChat({ type: 'test-result', runId, text: formatTestFooter(message.status, message.summary) });
+  });
+  const runTestsRef = useRef(tests.run);
+  runTestsRef.current = tests.run;
 
   function attachActiveRun(gatewayRunId: string): void {
     if (attachedRunId.current === gatewayRunId) return;
@@ -576,13 +591,6 @@ export function App({ config }: AppProps) {
   }, [bottomOpen, bottomTab]);
 
   useLayoutEffect(() => {
-    if (!pendingTestRun.current || !bottomOpen || bottomTab !== 'tests') return;
-    pendingTestRun.current = false;
-    const button = shellRef.current?.querySelector('[data-action="run-tests"]');
-    if (button instanceof HTMLElement) button.click();
-  }, [bottomOpen, bottomTab]);
-
-  useLayoutEffect(() => {
     const loc = selectedLocRef.current;
     if (!loc || selected) return;
     try {
@@ -732,8 +740,9 @@ export function App({ config }: AppProps) {
       sideWidth,
       bottomHeight,
       diffView,
+      runTestsAfterAgent,
     });
-  }, [theme, dockMode, provider, model, mode, autoAttach, pillCorner, sideWidth, bottomHeight, diffView]);
+  }, [theme, dockMode, provider, model, mode, autoAttach, pillCorner, sideWidth, bottomHeight, diffView, runTestsAfterAgent]);
 
   useEffect(() => {
     saveSession(projectKey, {
@@ -1028,6 +1037,16 @@ export function App({ config }: AppProps) {
     openSide('chat', true);
   }
 
+  function fixTestFailure(failure: TestFailureFix): void {
+    newChat();
+    const chip = chipFromTestFailure(failure);
+    setPinnedChips([chip]);
+    setExcludedKinds((current) => current.filter((kind) => kind !== 'test'));
+    setPrompt('Fix this failing test');
+    setChatUnread(false);
+    openSide('chat', true);
+  }
+
   function insertSuggestion(text: string): void {
     setPrompt((current) => {
       const trimmed = current.trimEnd();
@@ -1093,8 +1112,8 @@ export function App({ config }: AppProps) {
       return;
     }
     if (id === 'run-tests') {
-      pendingTestRun.current = true;
       openBottom('tests', true);
+      tests.run();
       return;
     }
     if (id === 'terminal') {
@@ -1251,6 +1270,10 @@ export function App({ config }: AppProps) {
         void refreshDiffs();
       }
       if (sawEdit) setReviewScope('run');
+      if (sawEdit && !stopped && runTestsAfterAgentRef.current) {
+        autoTestRunId.current = runId ?? localRunId;
+        runTestsRef.current();
+      }
       setSending(false);
       setRunId(null);
       rememberSession({ runId: null });
@@ -1543,10 +1566,28 @@ export function App({ config }: AppProps) {
           onClose={() => closeBottom(bottomTab === 'terminal')}
         >
           {terminalMounted ? (
-            <TerminalPanel workspace={workspace} hidden={!bottomOpen || bottomTab !== 'terminal'} />
+            <TerminalPanel
+              workspace={workspace}
+              hidden={!bottomOpen || bottomTab !== 'terminal'}
+              cwd={config.projectName}
+            />
           ) : null}
           {bottomOpen && bottomTab === 'tests' ? (
-            <TestRunner workspace={workspace} projectName={config.projectName} />
+            <TestRunner
+              workspace={workspace}
+              projectName={config.projectName}
+              status={tests.status}
+              log={tests.log}
+              error={tests.error}
+              summary={tests.summary}
+              report={tests.report}
+              running={tests.running}
+              runTestsAfterAgent={runTestsAfterAgent}
+              onRunTestsAfterAgent={setRunTestsAfterAgent}
+              onRun={tests.run}
+              onStop={tests.stop}
+              onFix={fixTestFailure}
+            />
           ) : null}
           {bottomOpen && bottomTab === 'console' ? (
             <ConsolePanel workspace={workspace} onFix={fixWithAi} />
@@ -1562,6 +1603,7 @@ export function App({ config }: AppProps) {
           dockMode={dockMode}
           provider={provider}
           autoAttach={autoAttach}
+          runTestsAfterAgent={runTestsAfterAgent}
           availability={availability}
           gatewayUrl={gatewayUrl}
           connectionState={connectionState}
@@ -1573,6 +1615,7 @@ export function App({ config }: AppProps) {
             setProvider(next);
           }}
           onAutoAttach={setAutoAttach}
+          onRunTestsAfterAgent={setRunTestsAfterAgent}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}
@@ -1663,7 +1706,8 @@ type ChatAction =
   | { type: 'start'; input: Parameters<typeof startTurn>[1] }
   | { type: 'stream'; localRunId: string; gatewayRunId?: string; event: UnifiedStreamEvent }
   | { type: 'retarget'; from: string; to: string }
-  | { type: 'notice'; notice: NoticeItem };
+  | { type: 'notice'; notice: NoticeItem }
+  | { type: 'test-result'; runId: string; text: string };
 
 function reduceChat(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -1677,6 +1721,8 @@ function reduceChat(state: ChatState, action: ChatAction): ChatState {
       return retargetRun(state, action.from, action.to);
     case 'notice':
       return { items: [...state.items, action.notice] };
+    case 'test-result':
+      return setRunTestResult(state, action.runId, action.text);
     case 'stream': {
       const aligned =
         action.gatewayRunId && action.gatewayRunId !== action.localRunId

@@ -8,11 +8,14 @@ import type { WorkspaceConnection } from './workspace-client.js';
 export interface TerminalPanelProps {
   workspace: WorkspaceConnection;
   hidden?: boolean;
+  cwd?: string;
 }
 
-export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps) {
+export function TerminalPanel({ workspace, hidden = false, cwd }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<XtermTerminal | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fallback, setFallback] = useState(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -49,6 +52,7 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
             cursor: DARK_PALETTE.accent,
           },
         });
+        termRef.current = term;
         const fit = new FitAddon();
         term.loadAddon(fit);
         await waitForSize(host);
@@ -111,6 +115,7 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
           return;
         }
         sessionId = session.sessionId;
+        setFallback(session.fallback === true);
         controller.setSession(session.sessionId, { cols: term.cols || 80, rows: term.rows || 24 });
         for (const chunk of pendingOutput.splice(0)) {
           if (chunk.id === sessionId) term.write(chunk.data);
@@ -123,6 +128,7 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
 
     return () => {
       cancelled = true;
+      termRef.current = null;
       if (sessionId) workspace.send({ type: 'pty.dispose', sessionId });
       for (const cleanup of cleanups) cleanup();
       term?.dispose();
@@ -131,6 +137,28 @@ export function TerminalPanel({ workspace, hidden = false }: TerminalPanelProps)
 
   return (
     <section className="panel" aria-label="Terminal" hidden={hidden} aria-hidden={hidden}>
+      <div className="terminal-toolbar">
+        <p className="kicker terminal-cwd" data-action="terminal-cwd" title={cwd?.trim() || 'project'}>
+          {cwd?.trim() || 'project'}
+        </p>
+        <div className="terminal-actions">
+          {fallback ? (
+            <p className="terminal-fallback" data-action="pty-fallback" role="status">
+              fallback shell — node-pty is not loaded
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="ghost"
+            data-action="clear-terminal"
+            onClick={() => {
+              termRef.current?.clear();
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
       {error ? <p className="banner">{error}</p> : null}
       <div ref={hostRef} className="terminal-host" tabIndex={0} />
     </section>

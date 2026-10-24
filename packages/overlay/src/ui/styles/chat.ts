@@ -256,6 +256,12 @@ export const CHAT_CSS = `
   font-size: var(--aid-text-xs);
 }
 
+.run-footer-tests {
+  margin: 0;
+  color: var(--aid-text);
+  font-size: var(--aid-text-xs);
+}
+
 .run-footer-actions {
   display: flex;
   flex-wrap: wrap;

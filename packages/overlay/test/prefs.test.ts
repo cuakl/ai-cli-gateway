@@ -67,6 +67,7 @@ describe('overlay prefs storage', () => {
     prefs.pillCorner = 'top-left';
     prefs.sideWidth = 480;
     prefs.bottomHeight = 220;
+    prefs.runTestsAfterAgent = true;
     savePrefs(prefs);
     expect(local.getItem(PREFS_KEY)).toBe(JSON.stringify(prefs));
     expect(loadPrefs()).toEqual(prefs);

@@ -20,6 +20,11 @@ export function RunFooter({ item, onReview, onUndo, onKeepGoing }: RunFooterProp
   return (
     <div className="run-footer">
       <p className="run-footer-meta">{summary.join(' · ')}</p>
+      {item.testResult ? (
+        <p className="run-footer-tests" data-action="run-test-result">
+          {item.testResult}
+        </p>
+      ) : null}
       {finished ? (
         <div className="run-footer-actions">
           {files.length > 0 ? (

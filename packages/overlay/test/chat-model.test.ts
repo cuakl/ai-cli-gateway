@@ -6,6 +6,7 @@ import {
   emptyChatState,
   groupToolBlocks,
   hydrateFromThread,
+  setRunTestResult,
   startTurn,
   toolLabel,
   type AssistantItem,
@@ -296,6 +297,15 @@ describe('groupToolBlocks', () => {
     expect(grouped[1]).toMatchObject({ kind: 'read-group', count: 3, label: 'Read 3 files' });
     expect(grouped[2]).toEqual({ kind: 'block', block: blocks[4] });
     expect(grouped[3]).toEqual({ kind: 'block', block: blocks[5] });
+  });
+});
+
+describe('setRunTestResult', () => {
+  it('appends a one-line suite result to the matching run', () => {
+    const state = begin();
+    const next = setRunTestResult(state, RUN, 'Tests: 3 failed');
+    expect(assistantOf(next).testResult).toBe('Tests: 3 failed');
+    expect(setRunTestResult(state, OTHER, 'Tests: 1 passed')).toBe(state);
   });
 });
 

@@ -33,6 +33,8 @@ export interface OverlayPrefs {
   sideWidth: number;
   bottomHeight: number;
   diffView: DiffViewMode;
+  /** Off by default. After an agent run that edited files, run the project suite. */
+  runTestsAfterAgent: boolean;
 }
 
 export interface OverlaySession {
@@ -83,6 +85,7 @@ export function loadPrefs(): Partial<OverlayPrefs> {
   }
   const diffView = parseDiffView(record.diffView);
   if (diffView) prefs.diffView = diffView;
+  if (typeof record.runTestsAfterAgent === 'boolean') prefs.runTestsAfterAgent = record.runTestsAfterAgent;
   return prefs;
 }
 
@@ -124,6 +127,7 @@ export function defaultPrefs(): OverlayPrefs {
     sideWidth: SIDE_CHAT_DEFAULT,
     bottomHeight: BOTTOM_DEFAULT,
     diffView: 'unified',
+    runTestsAfterAgent: false,
   };
 }
 

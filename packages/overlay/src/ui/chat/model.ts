@@ -90,6 +90,8 @@ export interface AssistantItem {
   checkpointRef?: string;
   /** Last `chunk.segment` applied as assistant text. */
   lastSegment?: number;
+  /** One-line suite result appended after an auto-run, e.g. `Tests: 3 failed`. */
+  testResult?: string;
 }
 
 export interface NoticeItem {
@@ -530,6 +532,14 @@ export function chipsFromSummary(summary: ContextSummary | null): ContextChip[] 
 
 export function countLabel(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+export function setRunTestResult(state: ChatState, runId: string, testResult: string): ChatState {
+  const index = findAssistantIndex(state.items, runId);
+  if (index < 0) return state;
+  const assistant = state.items[index];
+  if (assistant?.kind !== 'assistant') return state;
+  return replaceAssistant(state, index, { ...assistant, testResult });
 }
 
 /** Paths from a run's `files_changed` block. Latest run when `runId` is omitted. */

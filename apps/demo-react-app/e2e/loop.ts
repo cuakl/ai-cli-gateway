@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildServer } from '@aidev/gateway';
 import { chromium, type Browser, type Page } from 'playwright';
+import { CANNED_TEST_FINISHED } from './canned-tests.js';
 import { createEditingRuntime } from './scripted-gateway.js';
 
 const exec = promisify(execFile);
@@ -174,6 +175,7 @@ async function exercise(page: Page, url: string): Promise<void> {
   await page.getByText(/Committed [0-9a-f]{7} on main\./).waitFor({ timeout: 20_000 });
   await page.getByText('No changes yet').waitFor();
   await exerciseTerminal(page);
+  await exerciseTests(page);
 }
 
 async function exerciseInspector(page: Page): Promise<void> {
@@ -341,9 +343,29 @@ export default defineConfig({
 `;
 
 const PAGE_HOOKS = `
+  const CANNED_TEST_FINISHED = ${JSON.stringify(CANNED_TEST_FINISHED)};
   const Native = window.WebSocket;
   function Wrapped(url, protocols) {
     const socket = protocols === undefined ? new Native(url) : new Native(url, protocols);
+    const nativeSend = socket.send.bind(socket);
+    socket.send = function (data) {
+      if (typeof data === 'string') {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed && parsed.type === 'test.run') {
+            const finished = Object.assign({ requestId: parsed.requestId }, CANNED_TEST_FINISHED);
+            const payload = JSON.stringify(finished);
+            setTimeout(function () {
+              if (typeof socket.onmessage === 'function') {
+                socket.onmessage({ data: payload });
+              }
+            }, 20);
+            return;
+          }
+        } catch (error) {}
+      }
+      return nativeSend(data);
+    };
     socket.addEventListener('message', (event) => {
       const data = typeof event.data === 'string' ? event.data : '';
       if (data.includes('"run.finished"')) {
@@ -472,6 +494,33 @@ async function exerciseTerminal(page: Page): Promise<void> {
     }
   });
   await page.locator('[data-action="close-terminal"]').click();
+}
+
+async function exerciseTests(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Tests', exact: true }).click();
+  await page.locator('section[aria-label="Tests"]').waitFor();
+  await page.locator('[data-action="run-tests"]').click();
+  const failed = page.locator('[data-test-name="renders the hero button"]');
+  await failed.waitFor();
+  const status = await failed.getAttribute('data-status');
+  if (status !== 'failed') throw new Error(`Expected a failed test row, got data-status=${status}`);
+  await page.getByText('Expected', { exact: true }).waitFor();
+  await page.getByText('"hero-purple"').waitFor();
+  await page.getByText('Received', { exact: true }).waitFor();
+  await page.getByText('"primary"').waitFor();
+  await shot(page, 'tests');
+  await page.getByRole('button', { name: 'Fix with AI', exact: true }).click();
+  await page.getByLabel('Prompt').waitFor();
+  await page.waitForFunction(() => {
+    const root = document.querySelector('ai-devtools')?.shadowRoot;
+    const textarea = root?.querySelector('textarea');
+    const chip = root?.querySelector('[data-chip="test"]');
+    return (
+      textarea instanceof HTMLTextAreaElement &&
+      textarea.value === 'Fix this failing test' &&
+      Boolean(chip)
+    );
+  });
 }
 
 async function assertSecurity(gatewayUrl: string, token: string, root: string): Promise<void> {
