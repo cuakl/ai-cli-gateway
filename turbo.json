@@ -12,6 +12,10 @@
     "test": {
       "dependsOn": ["^build"],
       "outputs": []
+    },
+    "test:size": {
+      "dependsOn": ["build"],
+      "outputs": []
     }
   }
 }

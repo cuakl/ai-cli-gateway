@@ -112,6 +112,9 @@ importers:
 
   packages/dashboard:
     dependencies:
+      '@aidev/overlay':
+        specifier: workspace:*
+        version: link:../overlay
       '@aidev/protocol':
         specifier: workspace:*
         version: link:../protocol
